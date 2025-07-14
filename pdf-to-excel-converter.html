@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-PDF to Excel Converter</title>
+    <!-- Tailwind CSS CDN for easy styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the Inter font and overall layout */
+        body {
+            font-family: "Inter", sans-serif;
+            background-color: #f0f4f8; /* Light blue-gray background */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 2.5rem; /* Increased padding */
+            border-radius: 1rem; /* More rounded corners */
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1); /* Softer shadow */
+            width: 90%; /* Responsive width */
+            max-width: 600px; /* Max width for desktop */
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 1.5rem;
+            text-align: left;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #334155; /* Slate 700 */
+        }
+        .form-group input[type="file"] {
+            display: block;
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #cbd5e1; /* Slate 300 */
+            border-radius: 0.5rem;
+            box-sizing: border-box;
+        }
+        .form-group input[type="text"],
+        .form-group textarea { /* Added textarea styling */
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #cbd5e1;
+            border-radius: 0.5rem;
+            box-sizing: border-box;
+            font-size: 1rem;
+            line-height: 1.5;
+            resize: vertical; /* Allow vertical resizing for textarea */
+        }
+        .btn-primary {
+            background-color: #4F46E5; /* Indigo 600 */
+            color: white;
+            padding: 0.85rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+            border: none;
+            width: 100%;
+        }
+        .btn-primary:hover {
+            background-color: #4338CA; /* Indigo 700 */
+        }
+        .btn-primary:disabled {
+            background-color: #94a3b8; /* Slate 400 */
+            cursor: not-allowed;
+        }
+        .file-list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+            background-color: #f8fafc; /* Lightest blue-gray */
+            border: 1px solid #e2e8f0; /* Slate 200 */
+            border-radius: 0.5rem;
+            margin-top: 0.5rem;
+        }
+        .file-list-item .remove-btn {
+            background: none;
+            border: none;
+            color: #ef4444; /* Red 500 */
+            cursor: pointer;
+            font-weight: 600;
+            margin-left: 1rem;
+        }
+        .message-box-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .message-box {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+        .message-box h3 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: #1e293b; /* Slate 800 */
+        }
+        .message-box p {
+            margin-bottom: 1.5rem;
+            color: #475569; /* Slate 600 */
+        }
+        .message-box button {
+            background-color: #4F46E5;
+            color: white;
+            padding: 0.6rem 1.2rem;
+            border-radius: 0.5rem;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4F46E5;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 1rem auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2 class="text-3xl font-bold text-gray-800 mb-6">Multi-PDF to Excel Converter</h2>
+
+        <div class="form-group">
+            <label for="clientNameInput">Client Name:</label>
+            <input type="text" id="clientNameInput" placeholder="e.g., Akasia Body Corporate" class="rounded-lg p-2 border border-gray-300 w-full">
+        </div>
+
+        <div class="form-group">
+            <label for="pdfUpload">Upload PDF Files:</label>
+            <input type="file" id="pdfUpload" multiple accept=".pdf" onchange="handleFiles(event)" class="block w-full text-sm text-gray-500
+                file:mr-4 file:py-2 file:px-4
+                file:rounded-full file:border-0
+                file:text-sm file:font-semibold
+                file:bg-indigo-50 file:text-indigo-700
+                hover:file:bg-indigo-100">
+        </div>
+
+        <div id="fileList" class="file-list-container mt-4 mb-6">
+            <p id="noFilesMessage" class="text-gray-500">No files selected yet.</p>
+        </div>
+
+        <!-- New: AI Prompt Input Field -->
+        <div class="form-group">
+            <label for="aiPromptInput">Custom AI Prompt (Optional):</label>
+            <textarea id="aiPromptInput" rows="5" placeholder="Describe how you want the Excel data structured. E.g., 'Extract only assets and liabilities, grouped by current and non-current, and include only the latest year.' This will refine the default parsing instructions."
+                class="rounded-lg p-2 border border-gray-300 w-full"></textarea>
+            <p class="text-xs text-gray-500 mt-1">Leave blank to use the default financial statement parsing.</p>
+        </div>
+
+        <button id="convertBtn" class="btn-primary" onclick="startConversion()" disabled>
+            Convert to Excel
+        </button>
+
+        <!-- Message Box for Alerts -->
+        <div id="messageBoxOverlay" class="message-box-overlay hidden">
+            <div class="message-box">
+                <h3 id="messageBoxTitle"></h3>
+                <p id="messageBoxContent"></p>
+                <button onclick="hideMessageBox()">OK</button>
+            </div>
+        </div>
+
+        <!-- Loading Spinner -->
+        <div id="loadingSpinner" class="loading-spinner hidden"></div>
+    </div>
+
+    <script>
+        let selectedFiles = [];
+
+        function handleFiles(event) {
+            selectedFiles = Array.from(event.target.files);
+            const fileListDiv = document.getElementById('fileList');
+            fileListDiv.innerHTML = ''; // Clear previous list
+
+            if (selectedFiles.length === 0) {
+                fileListDiv.innerHTML = '<p id="noFilesMessage" class="text-gray-500">No files selected yet.</p>';
+                document.getElementById('convertBtn').disabled = true;
+                return;
+            }
+
+            document.getElementById('noFilesMessage')?.remove(); // Remove "No files selected" message
+
+            selectedFiles.forEach((file, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-list-item';
+                fileItem.innerHTML = `
+                    <span>${file.name}</span>
+                    <button class="remove-btn" onclick="removeFile(${index})">Remove</button>
+                `;
+                fileListDiv.appendChild(fileItem);
+            });
+            document.getElementById('convertBtn').disabled = false;
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            const fileInput = document.getElementById('pdfUpload');
+            fileInput.value = ''; // Clear the input so same files can be re-selected if needed
+
+            handleFiles({ target: { files: selectedFiles } }); // Re-render the list
+        }
+
+        async function startConversion() {
+            if (selectedFiles.length === 0) {
+                showMessageBox("No Files", "Please select at least one PDF file to convert.");
+                return;
+            }
+
+            const clientName = document.getElementById('clientNameInput').value.trim();
+            if (!clientName) {
+                showMessageBox("Client Name Required", "Please enter a client name.");
+                return;
+            }
+
+            const convertBtn = document.getElementById('convertBtn');
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            convertBtn.disabled = true;
+            convertBtn.textContent = 'Converting...';
+            loadingSpinner.classList.remove('hidden');
+
+            const formData = new FormData();
+            selectedFiles.forEach(file => {
+                formData.append('pdfs', file);
+            });
+            formData.append('client_name', clientName);
+
+            // New: Append the AI prompt
+            const aiPrompt = document.getElementById('aiPromptInput').value.trim();
+            if (aiPrompt) { // Only append if not empty
+                formData.append('ai_prompt', aiPrompt);
+            }
+
+            const backendUrl = 'http://127.0.0.1:5000/upload-pdfs'; // Ensure this matches your Flask server address
+
+            try {
+                const response = await fetch(backendUrl, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${clientName}_consolidated_financial_statements_position.xlsx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+                    showMessageBox("Success!", "Excel file generated and downloaded.");
+                } else {
+                    let errorData = { error: "Unknown error" };
+                    try {
+                        errorData = await response.json();
+                    } catch (jsonError) {
+                        errorData.error = response.statusText;
+                    }
+                    showMessageBox("Error!", `Failed to process files: ${errorData.error || "Unknown error"}`);
+                    console.error("Backend error:", errorData);
+                }
+            } catch (error) {
+                showMessageBox("Network Error", `Could not connect to the backend server. Please ensure it is running at ${backendUrl}. Error: ${error.message}`);
+                console.error("Fetch error:", error);
+            } finally {
+                loadingSpinner.classList.add('hidden');
+                convertBtn.disabled = false;
+                convertBtn.textContent = 'Convert to Excel';
+                selectedFiles = [];
+                document.getElementById('fileList').innerHTML = '<p id="noFilesMessage" class="text-gray-500">No files selected yet.</p>';
+                document.getElementById('clientNameInput').value = ''; // Clear client name input
+                document.getElementById('aiPromptInput').value = ''; // Clear AI prompt input
+            }
+        }
+
+        // Message Box Functions
+        function showMessageBox(title, content) {
+            document.getElementById('messageBoxTitle').textContent = title;
+            document.getElementById('messageBoxContent').textContent = content;
+            document.getElementById('messageBoxOverlay').classList.remove('hidden');
+        }
+
+        function hideMessageBox() {
+            document.getElementById('messageBoxOverlay').classList.add('hidden');
+        }
+
+        // Make functions globally accessible for HTML event attributes (if needed, though direct event listeners are preferred)
+        window.handleFiles = handleFiles;
+        window.removeFile = removeFile;
+        window.startConversion = startConversion;
+        window.showMessageBox = showMessageBox;
+        window.hideMessageBox = hideMessageBox;
+
+    </script>
+</body>
+</html>
