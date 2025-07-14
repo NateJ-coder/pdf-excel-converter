@@ -1,6 +1,0 @@
-"C:\Projects"
-
-cd C:\Projects\pdf_converter_project/backend
-
-.\venv\Scripts\activate
-
