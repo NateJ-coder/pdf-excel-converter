@@ -144,42 +144,108 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        /* Styles for the navigation bar (now for the About section) */
+        .navbar {
+            display: flex;
+            justify-content: flex-end; /* Align items to the right */
+            width: 100%;
+            max-width: 600px;
+            margin-bottom: 1rem;
+            padding: 0 1rem;
+        }
+        .navbar a {
+            color: #4F46E5;
+            text-decoration: none;
+            font-weight: 600;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .navbar a:hover {
+            background-color: #e0e7ff; /* Light indigo hover */
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2 class="text-3xl font-bold text-gray-800 mb-6">Multi-PDF to Excel Converter</h2>
-
-        <div class="form-group">
-            <label for="clientNameInput">Client Name:</label>
-            <input type="text" id="clientNameInput" placeholder="e.g., Akasia Body Corporate" class="rounded-lg p-2 border border-gray-300 w-full">
+        <!-- Landing Page Section (initially visible) -->
+        <div id="landingPage">
+            <h2 class="text-3xl font-bold text-gray-800 mb-6">Welcome to the Multi-PDF to Excel Converter</h2>
+            <p class="mb-8 text-gray-700">
+                Effortlessly extract and consolidate financial data from multiple PDF documents into a single, organized Excel file.
+            </p>
+            <button id="useAppBtn" class="btn-primary mb-4">Use App</button>
+            <button id="aboutLinkLanding" class="btn-primary bg-gray-200 text-gray-800 hover:bg-gray-300">About This App</button>
         </div>
 
-        <div class="form-group">
-            <label for="pdfUpload">Upload PDF Files:</label>
-            <input type="file" id="pdfUpload" multiple accept=".pdf" onchange="handleFiles(event)" class="block w-full text-sm text-gray-500
-                file:mr-4 file:py-2 file:px-4
-                file:rounded-full file:border-0
-                file:text-sm file:font-semibold
-                file:bg-indigo-50 file:text-indigo-700
-                hover:file:bg-indigo-100">
+        <!-- Main App Content (initially hidden) -->
+        <div id="appContent" class="hidden">
+            <h2 class="text-3xl font-bold text-gray-800 mb-6">Multi-PDF to Excel Converter</h2>
+
+            <div class="form-group">
+                <label for="clientNameInput">Client Name:</label>
+                <input type="text" id="clientNameInput" placeholder="e.g., Akasia Body Corporate" class="rounded-lg p-2 border border-gray-300 w-full">
+            </div>
+
+            <div class="form-group">
+                <label for="pdfUpload">Upload PDF Files:</label>
+                <input type="file" id="pdfUpload" multiple accept=".pdf" onchange="handleFiles(event)" class="block w-full text-sm text-gray-500
+                    file:mr-4 file:py-2 file:px-4
+                    file:rounded-full file:border-0
+                    file:text-sm file:font-semibold
+                    file:bg-indigo-50 file:text-indigo-700
+                    hover:file:bg-indigo-100">
+            </div>
+
+            <div id="fileList" class="file-list-container mt-4 mb-6">
+                <p id="noFilesMessage" class="text-gray-500">No files selected yet.</p>
+            </div>
+
+            <!-- New: AI Prompt Input Field -->
+            <div class="form-group">
+                <label for="aiPromptInput">Custom AI Prompt (Optional):</label>
+                <textarea id="aiPromptInput" rows="5" placeholder="Describe how you want the Excel data structured. E.g., 'Extract only assets and liabilities, grouped by current and non-current, and include only the latest year.' This will refine the default parsing instructions."
+                    class="rounded-lg p-2 border border-gray-300 w-full"></textarea>
+                <p class="text-xs text-gray-500 mt-1">Leave blank to use the default financial statement parsing.</p>
+            </div>
+
+            <button id="convertBtn" class="btn-primary" onclick="startConversion()" disabled>
+                Convert to Excel
+            </button>
+            <button id="backToLandingFromAppBtn" class="btn-primary bg-gray-200 text-gray-800 hover:bg-gray-300 mt-4">Back to Welcome</button>
         </div>
 
-        <div id="fileList" class="file-list-container mt-4 mb-6">
-            <p id="noFilesMessage" class="text-gray-500">No files selected yet.</p>
+        <!-- About Section (initially hidden) -->
+        <div id="aboutSection" class="hidden text-left">
+            <h2 class="text-3xl font-bold text-gray-800 mb-6">About This App</h2>
+            <p class="mb-4 text-gray-700">
+                This Multi-PDF to Excel Converter is designed to streamline the process of extracting financial data
+                from multiple PDF financial statements and consolidating it into a single, organized Excel spreadsheet.
+                Leveraging advanced AI (Google's Gemini API) and OCR (Google Cloud Vision API) technologies,
+                it intelligently parses complex financial documents, including:
+            </p>
+            <ul class="list-disc list-inside mb-4 text-gray-700">
+                <li>Statements of Financial Position</li>
+                <li>Statements of Comprehensive Income</li>
+                <li>Notes to the Financial Statements</li>
+            </ul>
+            <p class="mb-4 text-gray-700">
+                Key features include:
+            </p>
+            <ul class="list-disc list-inside mb-4 text-gray-700">
+                <li>Automated data extraction from various financial sections.</li>
+                <li>Consolidation of data from multiple PDFs into one Excel sheet.</li>
+                <li>Hierarchical organization of financial line items (e.g., Assets, Liabilities, Equity, Revenue, Expenses).</li>
+                <li>Year-specific columns for easy comparison across periods.</li>
+                <li>Ability to provide custom AI prompts for tailored data extraction.</li>
+                <li>Robust handling of common financial statement variations and formatting.</li>
+            </ul>
+            <p class="text-gray-700">
+                This tool is ideal for financial analysts, accountants, and anyone who needs to quickly aggregate
+                and analyze financial data from numerous PDF reports.
+            </p>
+            <button id="backToLandingFromAboutBtn" class="btn-primary mt-6">Back to Welcome</button>
         </div>
-
-        <!-- New: AI Prompt Input Field -->
-        <div class="form-group">
-            <label for="aiPromptInput">Custom AI Prompt (Optional):</label>
-            <textarea id="aiPromptInput" rows="5" placeholder="Describe how you want the Excel data structured. E.g., 'Extract only assets and liabilities, grouped by current and non-current, and include only the latest year.' This will refine the default parsing instructions."
-                class="rounded-lg p-2 border border-gray-300 w-full"></textarea>
-            <p class="text-xs text-gray-500 mt-1">Leave blank to use the default financial statement parsing.</p>
-        </div>
-
-        <button id="convertBtn" class="btn-primary" onclick="startConversion()" disabled>
-            Convert to Excel
-        </button>
 
         <!-- Message Box for Alerts -->
         <div id="messageBoxOverlay" class="message-box-overlay hidden">
@@ -196,6 +262,19 @@
 
     <script>
         let selectedFiles = [];
+
+        // Function to show a specific section and hide others
+        function showSection(sectionId) {
+            document.getElementById('landingPage').classList.add('hidden');
+            document.getElementById('appContent').classList.add('hidden');
+            document.getElementById('aboutSection').classList.add('hidden');
+            document.getElementById(sectionId).classList.remove('hidden');
+        }
+
+        // Initial load: show the landing page
+        document.addEventListener('DOMContentLoaded', () => {
+            showSection('landingPage');
+        });
 
         function handleFiles(event) {
             selectedFiles = Array.from(event.target.files);
@@ -313,6 +392,23 @@
         function hideMessageBox() {
             document.getElementById('messageBoxOverlay').classList.add('hidden');
         }
+
+        // --- Event Listeners for Navigation ---
+        document.getElementById('useAppBtn').addEventListener('click', function() {
+            showSection('appContent');
+        });
+
+        document.getElementById('aboutLinkLanding').addEventListener('click', function() {
+            showSection('aboutSection');
+        });
+
+        document.getElementById('backToLandingFromAppBtn').addEventListener('click', function() {
+            showSection('landingPage');
+        });
+
+        document.getElementById('backToLandingFromAboutBtn').addEventListener('click', function() {
+            showSection('landingPage');
+        });
 
         // Make functions globally accessible for HTML event attributes (if needed, though direct event listeners are preferred)
         window.handleFiles = handleFiles;
