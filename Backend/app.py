@@ -33,6 +33,7 @@
 # - Added specific instruction in Gemini prompt for numbers with spaces as thousands separators.
 # - **NEW**: Added more explicit examples for "Short-term deposits" for 2020 and 2019 in Gemini prompt.
 # - **NEW**: Implemented post-processing logic to ensure "Accumulated deficit" and "Accumulated surplus" are mutually exclusive per year.
+# - **NEW**: Integrated Document Refinement Tool with new routes and helper functions.
 
 import os
 import io
@@ -47,6 +48,10 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from google.cloud import vision
 from dotenv import load_dotenv
+import google.generativeai as genai # NEW: Import google.generativeai
+from docx import Document # NEW: Import Document for docx creation
+from docx.shared import Inches # NEW: Import Inches for docx images (if needed later)
+import pandas as pd # Already present, good for Excel/CSV parsing if needed for refinement tool
 
 load_dotenv()
 
@@ -66,9 +71,20 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+# NEW: Configure Gemini API
+if not GEMINI_API_KEY:
+    logger.error("Error: GEMINI_API_KEY is not set. Cannot call Gemini API.")
+    # You can uncomment the line below for local testing if you prefer to hardcode it,
+    # but it's not recommended for production.
+    # GEMINI_API_KEY = "YOUR_GEMINI_API_KEY_HERE"
+else:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+
 vision_client = vision.ImageAnnotatorClient()
 
-# --- Canonical Descriptions Mapping ---
+# --- Canonical Descriptions Mapping (Existing) ---
 # This dictionary maps various ways a description might appear (from OCR or Gemini)
 # to a single, consistent canonical form.
 CANONICAL_DESCRIPTIONS = {
@@ -226,20 +242,17 @@ def normalize_text(text):
     return text.strip()
 
 # OCR
-def detect_text_from_pdf(pdf_path):
+def detect_text_from_pdf(pdf_content): # Changed to accept content directly
     """
-    Performs OCR on a PDF file using Google Cloud Vision API.
+    Performs OCR on PDF content using Google Cloud Vision API.
     It processes the PDF page by page and returns all detected text.
     """
-    logger.info("Starting OCR for PDF: %s", pdf_path)
+    logger.info("Starting OCR for PDF content.")
     mime_type = 'application/pdf'
-
-    with io.open(pdf_path, 'rb') as pdf_file:
-        content = pdf_file.read()
 
     input_config_content = vision.InputConfig(
         mime_type=mime_type,
-        content=content
+        content=pdf_content
     )
 
     feature = vision.Feature(
@@ -251,17 +264,57 @@ def detect_text_from_pdf(pdf_path):
         features=[feature]
     )
 
-    response = vision_client.batch_annotate_files(requests=[request])
+    try:
+        response = vision_client.batch_annotate_files(requests=[request])
 
-    full_text = ""
-    for image_response in response.responses[0].responses:
-        if image_response.full_text_annotation:
-            full_text += image_response.full_text_annotation.text + "\n"
+        full_text = ""
+        for image_response in response.responses[0].responses:
+            if image_response.full_text_annotation:
+                full_text += image_response.full_text_annotation.text + "\n"
 
-    logger.info("Finished OCR for PDF: %s", pdf_path)
-    return normalize_text(full_text) # Use normalize_text here
+        logger.info("Finished OCR for PDF content.")
+        return normalize_text(full_text) # Use normalize_text here
+    except Exception as e:
+        logger.error(f"Error during OCR with Google Cloud Vision: {e}")
+        return None
 
-# Gemini API
+
+# NEW: General text extraction function
+def extract_text_from_file(file_content, filename):
+    """
+    Extracts text from various file types.
+    Supports PDF (via OCR), TXT, and attempts basic decoding for DOCX, XLSX, CSV.
+    """
+    logger.info(f"Attempting to extract text from {filename}...")
+    if filename.lower().endswith('.pdf'):
+        return detect_text_from_pdf(file_content)
+    elif filename.lower().endswith('.txt'):
+        try:
+            return file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            return file_content.decode('latin-1') # Fallback
+    elif filename.lower().endswith(('.doc', '.docx')):
+        # For .doc/.docx, a dedicated library like python-docx is needed for proper parsing.
+        # This is a basic attempt to read it as text, which might fail or produce garbage.
+        logger.warning(f"Full text extraction for {filename} (DOC/DOCX) requires 'python-docx' library and more complex parsing logic. Attempting basic text decode.")
+        try:
+            return file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            return file_content.decode('latin-1')
+    elif filename.lower().endswith(('.xlsx', '.csv')):
+        # For .xlsx/.csv, pandas can read structured data, but direct text extraction is not straightforward.
+        # This is a basic attempt to read it as text, which might fail or produce garbage.
+        logger.warning(f"Full text extraction for {filename} (XLSX/CSV) requires 'pandas' or 'openpyxl' and specific parsing logic. Attempting basic text decode.")
+        try:
+            return file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            return file_content.decode('latin-1')
+    else:
+        logger.warning(f"Unsupported file type for text extraction: {filename}")
+        return None
+
+
+# Gemini API (Existing parse_with_gemini for PDF to Excel)
 def parse_with_gemini(text_content, filename, custom_prompt_text=None):
     """
     Sends the OCR'd text content to the Gemini API for structured data extraction.
@@ -377,7 +430,133 @@ Provide the output as a JSON array of objects, like this example:
             logger.error("Raw Gemini response text that failed to decode: %s", response.text)
         return []
 
-# --- Helper Function for Post-processing and Category Inference ---
+# NEW: Gemini API for Document Refinement
+async def generate_refinement_instructions_with_gemini(template_text, data_text):
+    """
+    Generates mapping instructions for document refinement using Gemini AI.
+    """
+    logger.info("Sending template and data text to Gemini API for refinement instructions...")
+
+    if not GEMINI_API_KEY:
+        logger.error("Error: GEMINI_API_KEY is not set. Cannot call Gemini API for refinement.")
+        return {"mapping_instructions": [], "summary": "API Key not configured."}
+
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    prompt = f"""
+    You are an AI assistant specialized in document transformation.
+    Given a 'template document' and a 'data document', your goal is to explain
+    how to map the relevant information from the 'data document' into the structure
+    of the 'template document'.
+
+    Analyze the structure and key fields in the Template Document.
+    Analyze the content and key data points in the Data Document.
+    Identify potential fields in the Template Document that could be populated by data from the Data Document.
+
+    Template Document Content (first 2000 characters):
+    ---
+    {template_text[:2000]}
+    ---
+
+    Data Document Content (first 2000 characters):
+    ---
+    {data_text[:2000]}
+    ---
+
+    Please provide a JSON object with a 'mapping_instructions' key.
+    The value should be a list of objects, where each object describes a mapping.
+    Each mapping object should have:
+    - 'template_field': A description or key from the template where data should go (e.g., "Invoice Number", "Client Name", "Total Amount").
+    - 'data_source': A description or key from the data document where the value comes from (e.g., "Invoice ID from Data", "Customer Name from Data File", "Sum of Line Items").
+    - 'example_value': An example of the value from the data document that would be mapped.
+    - 'notes': Any specific instructions for inserting or formatting this data (e.g., "Insert directly", "Format as currency", "Extract date only").
+
+    If you cannot find clear mappings, indicate that in the 'summary'.
+    Example JSON structure:
+    {{
+        "mapping_instructions": [
+            {{
+                "template_field": "Customer Name (from template)",
+                "data_source": "Client Name (from data file)",
+                "example_value": "John Doe",
+                "notes": "Insert directly"
+            }},
+            {{
+                "template_field": "Invoice Total (from template)",
+                "data_source": "Total Amount (from data file)",
+                "example_value": "123.45",
+                "notes": "Ensure currency format"
+            }}
+        ],
+        "summary": "Overall mapping strategy or findings."
+    }}
+    """
+    try:
+        response = await model.generate_content_async(
+            prompt,
+            generation_config={
+                "response_mime_type": "application/json",
+                "response_schema": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "mapping_instructions": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "template_field": {"type": "STRING"},
+                                    "data_source": {"type": "STRING"},
+                                    "example_value": {"type": "STRING"},
+                                    "notes": {"type": "STRING"}
+                                }
+                            }
+                        },
+                        "summary": {"type": "STRING"}
+                    }
+                }
+            }
+        )
+        json_string = response.candidates[0].content.parts[0].text
+        logger.debug(f"Raw JSON string from Gemini (refinement): {json_string[:500]}...")
+        return json.loads(json_string)
+    except Exception as e:
+        logger.error(f"Error generating refinement instructions with Gemini: {e}")
+        return {"mapping_instructions": [], "summary": f"Error: {e}"}
+
+# NEW: Function to create refined document (placeholder)
+def create_refined_document(template_filename, mapping_instructions):
+    """
+    Creates a new document based on the template and inserts data based on mappings.
+    This is a highly simplified example. A real implementation would need
+    to parse the template structure (e.g., identifying placeholders) and
+    then insert data. For now, it just creates a simple docx with the instructions.
+    """
+    logger.info(f"Creating refined document based on template '{template_filename}'...")
+    doc = Document()
+    doc.add_heading(f'Refined Document Output for {template_filename}', level=1)
+    doc.add_paragraph('This document is a placeholder for the refined output.')
+    doc.add_paragraph('Below are the AI-generated mapping instructions:')
+
+    if mapping_instructions and mapping_instructions.get("mapping_instructions"):
+        for item in mapping_instructions["mapping_instructions"]:
+            doc.add_paragraph(f"Template Field: {item.get('template_field', 'N/A')}")
+            doc.add_paragraph(f"    Data Source: {item.get('data_source', 'N/A')}")
+            doc.add_paragraph(f"    Example Value: {item.get('example_value', 'N/A')}")
+            doc.add_paragraph(f"    Notes: {item.get('notes', 'N/A')}")
+            doc.add_paragraph("") # Add a blank line for separation
+        doc.add_paragraph(f"Summary: {mapping_instructions.get('summary', 'No summary provided.')}")
+    else:
+        doc.add_paragraph("No specific mapping instructions were generated by the AI.")
+        doc.add_paragraph(f"AI Summary: {mapping_instructions.get('summary', 'N/A')}")
+
+    # Save to a BytesIO object
+    bio = io.BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    logger.info("Refined document (placeholder) generated in memory.")
+    return bio
+
+
+# --- Helper Function for Post-processing and Category Inference (Existing) ---
 def infer_categories_and_structure(parsed_items):
     """
     Infers Category and SubCategory for each item based on description keywords and common financial statement structure.
@@ -385,13 +564,13 @@ def infer_categories_and_structure(parsed_items):
     Also applies canonical descriptions.
     """
     structured_items = []
-    
+
     # These keywords are still useful for internal categorization even if not explicitly displayed in Excel
     category_keywords = {
         "Assets": ["assets"],
-        "Equity": ["equity", "reserves", "accumulated surplus", "accumulated deficit", "accumulated funds"], 
+        "Equity": ["equity", "reserves", "accumulated surplus", "accumulated deficit", "accumulated funds"],
         "Liabilities": ["liabilities", "trade and other payables", "provisions", "bank overdraft", "deferred tax liability"],
-        "Revenue": ["revenue", "income", "levies received", "fines", "water recovered", "ombudsman levy", "electricity recovered", "garage levies", "security levies", "tower rental", "insurance claims received", "special levy", "interest received", "fair value gains", "rental income", "interest income", "csos levies", "garbage levies"],
+        "Revenue": ["revenue", "income", "levies received", "fines", "water recovered", "ombudsman levy", "electricity recovered", "garage levies", "security levies", "tower rental", "insurance claims received", "special levy", "interest received", "fair value adjustments", "investment revenue", "rental income", "interest income", "csos levies", "garbage levies"],
         "Expenses": ["operating expenses", "accounting fees", "bank charges", "csos", "cleaning", "depreciation", "amortisation", "impairments", "electricity", "employee costs", "garden services", "insurance", "management fees", "other expenses", "petrol and oil", "printing and stationery", "protective clothing", "repairs and maintenance", "security", "auditor's remuneration", "bad debts", "consulting and professional fees", "compensation commissioner", "employee costs - salaried staff", "municipal charges", "electricity - recovered from members", "water-recovered from members", "maintenance", "elevator maintenance"],
         "Other Financial Items": ["surplus (deficit) for the year", "total comprehensive income (loss) for the year", "surplus before taxation", "adjustments for", "movements in provisions", "changes in working capital", "net provisions", "non provision of tax", "taxation", "cash generated from (used in) operations", "basic", "uif", "deficit surplus for the year"],
     }
@@ -399,7 +578,7 @@ def infer_categories_and_structure(parsed_items):
     subcategory_keywords = {
         "Non-Current Assets": ["non-current assets", "property, plant and equipment", "other financial assets"],
         "Current Assets": ["current assets", "trade and other receivables", "cash and cash equivalents", "cash on hand", "bank balances", "short-term deposits", "absa"], # Added 'absa' here
-        "Equity": ["reserves", "accumulated surplus", "accumulated deficit", "accumulated funds"], 
+        "Equity": ["reserves", "accumulated surplus", "accumulated deficit", "accumulated funds"],
         "Non-Current Liabilities": ["non-current liabilities", "deferred tax liability"],
         "Current Liabilities": ["current liabilities", "trade and other payables", "provisions", "amounts received in advance", "deposits received", "bank overdraft", "legal proceedings"],
         "Income": ["revenue", "levies received", "fines", "water recovered", "ombudsman levy", "electricity recovered", "garage levies", "security levies", "other income", "tower rental", "insurance claims received", "special levy", "interest received", "fair value gains", "investment revenue", "rental income", "interest income", "csos levies", "garbage levies"],
@@ -414,9 +593,9 @@ def infer_categories_and_structure(parsed_items):
         # Normalize and get canonical description
         normalized_desc = normalize_text(original_description).lower()
         canonical_description = CANONICAL_DESCRIPTIONS.get(normalized_desc, original_description)
-        
+
         # Update the item's description to its canonical form
-        item["Description"] = canonical_description 
+        item["Description"] = canonical_description
 
         inferred_category = "Other Financial Items" # Default to a more general category
         inferred_subcategory = "N/A"
@@ -425,9 +604,9 @@ def infer_categories_and_structure(parsed_items):
         for cat, keywords in category_keywords.items():
             if any(keyword in normalized_desc for keyword in keywords):
                 inferred_category = cat
-                last_major_section = cat 
+                last_major_section = cat
                 break
-        
+
         # If no explicit category found, use the last major section as a hint
         if inferred_category == "Other Financial Items" and last_major_section:
             inferred_category = last_major_section
@@ -476,14 +655,14 @@ def infer_categories_and_structure(parsed_items):
             inferred_subcategory = "N/A"
 
         item["Category"] = inferred_category
-        item["SubCategory"] = inferred_subcategory.replace(" and other", "").replace(" and cash", "") 
+        item["SubCategory"] = inferred_subcategory.replace(" and other", "").replace(" and cash", "")
 
         structured_items.append(item)
-    
+
     return structured_items
 
 
-# --- Helper Function for Excel Generation (Refined for Hierarchical Output) ---
+# --- Helper Function for Excel Generation (Refined for Hierarchical Output) (Existing) ---
 def generate_excel(client_name, all_parsed_data):
     """
     Generates a single Excel workbook from the parsed data of multiple PDFs.
@@ -493,7 +672,7 @@ def generate_excel(client_name, all_parsed_data):
     """
     logger.info("Starting Excel generation for client: %s", client_name)
     wb = Workbook()
-    
+
     # Define styles
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid") # Indigo
@@ -510,29 +689,29 @@ def generate_excel(client_name, all_parsed_data):
 
     # --- Consolidated Data Sheet ---
     main_ws = wb.create_sheet(f"{client_name} - Consolidated Data")
-    
+
     all_years = set()
-    
+
     # Apply category inference to all parsed data and collect all years
     processed_all_parsed_data = {}
     for filename, items in all_parsed_data.items():
         processed_items = infer_categories_and_structure(items)
         processed_all_parsed_data[filename] = processed_items
 
-        for item in processed_items: 
+        for item in processed_items:
             if "AmountsByYear" in item and isinstance(item["AmountsByYear"], dict):
                 for year_str in item["AmountsByYear"].keys():
                     try:
-                        all_years.add(int(year_str)) 
+                        all_years.add(int(year_str))
                     except ValueError:
                         logger.warning("Non-numeric year found: %s in %s", year_str, filename)
-                        pass 
+                        pass
 
     sorted_years = sorted(list(all_years), reverse=True) # Sort years descending
     logger.debug(f"Detected and sorted years: {sorted_years}")
 
     # Main title - merge across Description column + all year columns
-    main_ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=1 + len(sorted_years)) 
+    main_ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=1 + len(sorted_years))
     title_cell = main_ws['A1']
     title_cell.value = f"Consolidated Financial Statements for {client_name}"
     title_cell.font = Font(size=16, bold=True, color="4F46E5")
@@ -548,13 +727,13 @@ def generate_excel(client_name, all_parsed_data):
         cell.fill = header_fill
         cell.border = thin_border
         cell.alignment = center_aligned_text
-        main_ws.column_dimensions[get_column_letter(col_num + 1)].width = 20 
+        main_ws.column_dimensions[get_column_letter(col_num + 1)].width = 20
     main_ws.column_dimensions['A'].width = 40 # Description column width
 
 
     # Consolidate data for the main sheet
     # Key: (Canonical Description, Category, SubCategory), Value: {year: amount}
-    consolidated_items_by_key = {} 
+    consolidated_items_by_key = {}
 
     # Pre-initialize all descriptions from MASTER_STRUCTURE to ensure they appear, even if Gemini misses them
     # The key uses the canonical description and the category/subcategory as defined in MASTER_STRUCTURE
@@ -567,16 +746,16 @@ def generate_excel(client_name, all_parsed_data):
 
 
     # Populate consolidated_items_by_key with actual parsed data, overwriting None values
-    for filename, items in processed_all_parsed_data.items(): 
+    for filename, items in processed_all_parsed_data.items():
         logger.debug(f"Processing parsed items from file: {filename}")
         for item in items:
             description = item.get("Description") # This is already canonical from infer_categories_and_structure
             amounts_by_year = item.get("AmountsByYear", {})
-            
+
             if description:
                 # Attempt to find the best matching key in consolidated_items_by_key based on MASTER_STRUCTURE
                 target_key = None
-                
+
                 # Priority 1: Find by canonical description within MASTER_STRUCTURE
                 # This ensures that if a description is defined in MASTER_STRUCTURE,
                 # we use its predefined category/subcategory, overriding Gemini's inference if it differs.
@@ -587,7 +766,7 @@ def generate_excel(client_name, all_parsed_data):
                             break
                     if target_key:
                         break
-                
+
                 if target_key is None:
                     # If description is still not found in MASTER_STRUCTURE,
                     # use the inferred category/subcategory from infer_categories_and_structure
@@ -595,11 +774,11 @@ def generate_excel(client_name, all_parsed_data):
                     inferred_cat = item.get("Category", "Other Financial Items")
                     inferred_subcat = item.get("SubCategory", "N/A")
                     target_key = (description, inferred_cat, inferred_subcat)
-                    
+
                     if target_key not in consolidated_items_by_key:
                         logger.warning("Gemini parsed an item not explicitly in MASTER_STRUCTURE: '%s' (Inferred Cat: '%s', SubCat: '%s'). Adding it.", description, inferred_cat, inferred_subcat)
-                        consolidated_items_by_key[target_key] = {year: None for year in sorted_years} 
-                
+                        consolidated_items_by_key[target_key] = {year: None for year in sorted_years}
+
                 # Update amounts for the determined target_key
                 for year_str, amount in amounts_by_year.items():
                     try:
@@ -607,22 +786,22 @@ def generate_excel(client_name, all_parsed_data):
                         # Clean amount string: remove all non-digit, non-decimal, non-minus characters first,
                         # then handle parentheses. This is more aggressive and should catch more variations.
                         clean_amount_str = str(amount).strip()
-                        
+
                         # Handle parentheses for negative numbers first
                         if clean_amount_str.startswith('(') and clean_amount_str.endswith(')'):
                             clean_amount_str = '-' + clean_amount_str[1:-1]
-                        
+
                         # Remove all non-numeric characters except for a single decimal point and leading minus sign
                         # This should handle spaces, commas, and other symbols, including non-breaking spaces (\xa0)
                         clean_amount_str = re.sub(r'[^\d.-]+', '', clean_amount_str.replace('\xa0', ''))
-                        
+
                         # Ensure only one decimal point
                         if clean_amount_str.count('.') > 1:
                             parts = clean_amount_str.split('.')
                             clean_amount_str = parts[0] + '.' + ''.join(parts[1:])
 
                         clean_amount = float(clean_amount_str) if clean_amount_str else None
-                        
+
                         # Ensure we don't overwrite with None if a value already exists
                         # This logic is crucial for combining data from multiple PDFs
                         if clean_amount is not None:
@@ -640,7 +819,7 @@ def generate_excel(client_name, all_parsed_data):
                         logger.warning(f"  Could not convert amount '{amount}' for year {year_str}, description '{description}' in file {filename}. Setting to None. Error: {e}")
                         consolidated_items_by_key[target_key][year_int] = None
 
-    # --- NEW: Post-processing for Accumulated Surplus/Deficit Mutual Exclusivity ---
+    # --- NEW: Post-processing for Accumulated Surplus/Deficit Mutual Exclusivity (Existing) ---
     surplus_key = ("Accumulated surplus", "Equity", "Equity")
     deficit_key = ("Accumulated deficit", "Equity", "Equity")
 
@@ -660,10 +839,10 @@ def generate_excel(client_name, all_parsed_data):
                 actual_deficit_key = key
             if actual_surplus_key and actual_deficit_key:
                 break
-        
+
         if actual_surplus_key and year in consolidated_items_by_key[actual_surplus_key]:
             surplus_value = consolidated_items_by_key[actual_surplus_key][year]
-        
+
         if actual_deficit_key and year in consolidated_items_by_key[actual_deficit_key]:
             deficit_value = consolidated_items_by_key[actual_deficit_key][year]
 
@@ -735,23 +914,23 @@ def generate_excel(client_name, all_parsed_data):
                     break
             if is_explicitly_mapped:
                 break
-        
+
         if not is_explicitly_mapped:
             # Exclude specific totals that might be extracted but are not desired in the raw data sheet
             if description.lower() not in ["total assets", "total equity", "total liabilities", "total equity and liabilities", "total income", "total operating expenses"]:
                 unmapped_items_for_display.append((description, category, subcategory, year_data))
-    
+
     unmapped_items_for_display.sort(key=lambda x: x[0]) # Sort alphabetically by description
     logger.debug(f"Unmapped items for display: {len(unmapped_items_for_display)}")
 
 
     # Write data to Excel following MASTER_STRUCTURE for hierarchical output
     category_display_order = ["Assets", "Equity", "Liabilities", "Revenue", "Expenses", "Other Financial Items"]
-    
+
     for category_name in category_display_order:
         subcategories_dict = MASTER_STRUCTURE.get(category_name)
         if not subcategories_dict:
-            continue 
+            continue
 
         # Check if this category has any data before printing its header
         category_has_data = False
@@ -767,10 +946,10 @@ def generate_excel(client_name, all_parsed_data):
                     break
             if category_has_data:
                 break
-        
+
         if category_has_data:
             main_ws.append([]) # Spacer row before new category
-            main_ws.append([category_name]) 
+            main_ws.append([category_name])
             category_row = main_ws[main_ws.max_row]
             for cell in category_row:
                 cell.font = bold_font
@@ -780,12 +959,12 @@ def generate_excel(client_name, all_parsed_data):
             logger.debug(f"Printed category header: {category_name}")
 
             # Sort subcategories for consistent display (N/A last)
-            sorted_subcategories = sorted(subcategories_dict.keys(), key=lambda x: (0 if x != "N/A" else 1, x)) 
+            sorted_subcategories = sorted(subcategories_dict.keys(), key=lambda x: (0 if x != "N/A" else 1, x))
 
             for subcategory_name in sorted_subcategories:
                 descriptions_list = subcategories_dict.get(subcategory_name)
                 if not descriptions_list:
-                    continue 
+                    continue
 
                 # Check if this subcategory has any data before printing its header
                 subcategory_has_data = False
@@ -795,10 +974,10 @@ def generate_excel(client_name, all_parsed_data):
                     if year_data and any(v is not None for v in year_data.values()):
                         subcategory_has_data = True
                         break
-                
-                if subcategory_has_data and subcategory_name != "N/A": 
+
+                if subcategory_has_data and subcategory_name != "N/A":
                     main_ws.append([]) # Spacer row before new subcategory
-                    main_ws.append([subcategory_name]) 
+                    main_ws.append([subcategory_name])
                     subcategory_row = main_ws[main_ws.max_row]
                     for cell in subcategory_row:
                         cell.font = bold_font
@@ -806,33 +985,33 @@ def generate_excel(client_name, all_parsed_data):
                         cell.border = thin_border
                     main_ws.merge_cells(start_row=subcategory_row[0].row, start_column=1, end_row=subcategory_row[0].row, end_column=1 + len(sorted_years))
                     logger.debug(f"  Printed subcategory header: {subcategory_name}")
-                
+
                 for description_from_master in descriptions_list:
                     lookup_key = (description_from_master, category_name, subcategory_name)
                     year_data = consolidated_items_by_key.get(lookup_key) # Get the consolidated data for this item
-                    
+
                     # Only print the row if there's actual data for it in any year
                     if year_data and any(v is not None for v in year_data.values()):
                         row_values = [description_from_master] # Start with description
-                        
+
                         # Add year values
                         for year in sorted_years:
                             amount = year_data.get(year)
                             row_values.append(amount)
-                        
-                        main_ws.append(row_values) 
-                        desc_cell = main_ws[main_ws.max_row][0] 
+
+                        main_ws.append(row_values)
+                        desc_cell = main_ws[main_ws.max_row][0]
 
                         # Apply indent to description if it's under a subcategory (and not a top-level total)
                         if category_name in ["Assets", "Equity", "Liabilities", "Revenue", "Expenses", "Other Financial Items"] and subcategory_name != "N/A":
                             desc_cell.alignment = indent_alignment
-                        
+
                         # Apply number formatting and bolding for values
                         for col_idx, value in enumerate(row_values):
                             if col_idx > 0 and value is not None: # Only for value columns (not description)
                                 cell = main_ws.cell(row=main_ws.max_row, column=col_idx + 1, value=value)
-                                cell.number_format = numbers.FORMAT_NUMBER_COMMA_SEPARATED1 
-                        
+                                cell.number_format = numbers.FORMAT_NUMBER_COMMA_SEPARATED1
+
                         # Apply bold formatting to total lines (across all relevant columns)
                         if description_from_master.lower() in ["total assets", "total equity", "total liabilities", "total income", "total operating expenses", "total equity and liabilities", "accumulated funds"]: # Added accumulated funds to bold
                             for col_idx in range(1, 2 + len(sorted_years)): # Apply bold to Description + all year columns
@@ -853,7 +1032,7 @@ def generate_excel(client_name, all_parsed_data):
 
         if unmapped_has_data:
             main_ws.append([]) # Spacer
-            main_ws.append(["Additional Items (Not in Master Structure)"]) 
+            main_ws.append(["Additional Items (Not in Master Structure)"])
             other_header_row = main_ws[main_ws.max_row]
             for cell in other_header_row:
                 cell.font = bold_font
@@ -870,7 +1049,7 @@ def generate_excel(client_name, all_parsed_data):
                         amount = year_data.get(year)
                         row_values.append(amount)
                     main_ws.append(row_values)
-                    
+
                     desc_cell = main_ws[main_ws.max_row][0]
                     desc_cell.alignment = indent_alignment # Indent these as they are "other"
 
@@ -885,7 +1064,7 @@ def generate_excel(client_name, all_parsed_data):
 
     excel_stream = io.BytesIO()
     wb.save(excel_stream)
-    excel_stream.seek(0) 
+    excel_stream.seek(0)
     logger.info("Excel file generated in memory.")
     return excel_stream
 
@@ -911,38 +1090,35 @@ async def upload_pdfs():
         return jsonify({"error": "No PDF files part in the request"}), 400
 
     files = request.files.getlist('pdfs')
-    client_name = request.form.get('client_name', 'Unknown Client') 
-    ai_prompt_text = request.form.get('ai_prompt', None) 
+    client_name = request.form.get('client_name', 'Unknown Client')
+    ai_prompt_text = request.form.get('ai_prompt', None)
 
     if not files:
         logger.warning("No selected PDF files.")
         return jsonify({"error": "No selected PDF files"}), 400
 
-    all_parsed_data = {} 
+    all_parsed_data = {}
 
     for file in files:
         if file.filename == '':
             logger.warning("Skipping file with empty filename.")
             continue
         if file and file.filename.endswith('.pdf'):
-            filename = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-            file.save(filename)
-            logger.info("Saved uploaded file: %s", filename)
+            # Read file content directly into memory instead of saving to disk
+            pdf_content = file.read()
+            logger.info("Received PDF file: %s", file.filename)
 
             try:
-                extracted_text = detect_text_from_pdf(filename)
+                extracted_text = detect_text_from_pdf(pdf_content) # Pass content directly
 
                 if not extracted_text.strip():
                     logger.warning("Skipped %s due to empty OCR result.", file.filename)
-                    if os.path.exists(filename):
-                        os.remove(filename)
-                        logger.info("Cleaned up empty OCR file: %s", filename)
-                    continue 
-                
+                    continue
+
                 logger.info("OCR result length for %s: %d characters", file.filename, len(extracted_text))
 
                 parsed_items = parse_with_gemini(extracted_text, file.filename, ai_prompt_text)
-                
+
                 if not parsed_items:
                     logger.warning("No items parsed from %s. Check OCR quality or Gemini prompt.", file.filename)
 
@@ -950,38 +1126,86 @@ async def upload_pdfs():
 
             except Exception as e:
                 logger.exception("Error processing %s: %s", file.filename, e) # Use exception for full traceback
-                if os.path.exists(filename):
-                    os.remove(filename)
                 return jsonify({"error": f"Failed to process {file.filename}: {str(e)}"}), 500
         else:
             logger.warning("File %s is not a PDF. Skipping.", file.filename)
             return jsonify({"error": f"File {file.filename} is not a PDF"}), 400
 
-    # Clean up uploaded files after processing
-    for file in files:
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            logger.info("Cleaned up temporary file: %s", file_path)
+    # No need to clean up uploaded files from disk as they are processed in memory
 
     if not all_parsed_data:
         logger.error("No data was parsed from any of the uploaded PDFs. Cannot generate Excel.")
         return jsonify({"error": "No data was parsed from any of the uploaded PDFs. Cannot generate Excel."}), 400
 
-    excel_stream = generate_excel(client_name, all_parsed_data) 
+    excel_stream = generate_excel(client_name, all_parsed_data)
 
     try:
         return send_file(
             excel_stream,
             as_attachment=True,
-            download_name=f'{client_name}_consolidated_financial_statements_position.xlsx', 
+            download_name=f'{client_name}_consolidated_financial_statements_position.xlsx',
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
     except Exception as e:
         logger.exception("Error sending Excel file: %s", e)
         return jsonify({"error": f"Failed to send Excel file: {str(e)}"}), 500
     finally:
-        pass 
+        pass
+
+@app.route('/refine-document', methods=['POST'])
+async def refine_document():
+    """
+    Handles file uploads for the Document Refinement Tool.
+    Extracts text from template and data files,
+    uses Gemini to generate mapping instructions,
+    and creates a refined document (placeholder for now).
+    """
+    if 'template_file' not in request.files or 'data_file' not in request.files:
+        logger.error("Both template and data files are required for refinement.")
+        return jsonify({"error": "Both template and data files are required"}), 400
+
+    template_file = request.files['template_file']
+    data_file = request.files['data_file']
+
+    if not template_file.filename or not data_file.filename:
+        logger.warning("No selected template or data file for refinement.")
+        return jsonify({"error": "No selected template or data file"}), 400
+
+    # Read file contents directly into memory
+    template_content = template_file.read()
+    data_content = data_file.read()
+
+    logger.info(f"Received template file: {template_file.filename}, data file: {data_file.filename}")
+
+    # Extract text using OCR or simple decoding
+    template_text = extract_text_from_file(template_content, template_file.filename)
+    data_text = extract_text_from_file(data_content, data_file.filename)
+
+    if not template_text:
+        logger.error(f"Could not extract text from template file: {template_file.filename}.")
+        return jsonify({"error": f"Could not extract text from template file: {template_file.filename}. Ensure it's a readable format (PDF, TXT, or basic DOCX/XLSX/CSV decode)."}), 400
+    if not data_text:
+        logger.error(f"Could not extract text from data file: {data_file.filename}.")
+        return jsonify({"error": f"Could not extract text from data file: {data_file.filename}. Ensure it's a readable format (PDF, TXT, or basic DOCX/XLSX/CSV decode)."}), 400
+
+    # Generate parsing instructions using Gemini
+    mapping_instructions = await generate_refinement_instructions_with_gemini(template_text, data_text)
+
+    # Create the refined document (currently a dummy docx with instructions)
+    refined_doc_io = create_refined_document(template_file.filename, mapping_instructions)
+
+    # Determine output filename
+    template_name_parts = os.path.splitext(template_file.filename)
+    # Default to .docx output for the refined document
+    output_filename = f"refined_{template_name_parts[0]}.docx"
+
+    try:
+        return send_file(refined_doc_io, mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                         as_attachment=True, download_name=output_filename)
+    except Exception as e:
+        logger.exception("Error sending refined document file: %s", e)
+        return jsonify({"error": f"Failed to send refined document file: {str(e)}"}), 500
+
 
 # --- Main execution block ---
 if __name__ == '__main__':
