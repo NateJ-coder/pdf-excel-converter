@@ -18,9 +18,10 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 100vh;
+            min-height: 100vh; /* Ensure body takes at least full viewport height */
             margin: 0;
-            overflow: hidden; /* Prevent scrollbar during initial animation */
+            overflow-y: auto; /* Allow vertical scrolling */
+            overflow-x: hidden; /* Prevent horizontal scrolling */
         }
 
         /* Keyframe for the initial pop-up effect */
