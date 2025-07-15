@@ -1,9 +1,53 @@
+# backend/app.py
+# Updated to include:
+# - master description list
+# - predefined row order
+# - file-based year alignment
+# - normalized OCR text
+# - inclusion of total lines if missing
+# - Number formatting for currency columns in Excel
+# - Refactored Category Inference with Canonical Descriptions
+# - Logging Module instead of print()
+# - Pre-initialization of consolidated_items to ensure all MASTER_STRUCTURE descriptions appear
+# - Improved Gemini prompt to avoid unnecessary total recalculations
+# - Removed responseSchema from Gemini API API call for more flexible parsing
+# - Refined Excel generation logic for precise data placement and summary calculations
+# - Broadened Gemini prompt to extract data from all relevant financial sections (including notes)
+# - Enhanced infer_categories_and_structure to handle more diverse financial line items
+# - Improved consolidated_items_by_key population to strictly align with MASTER_STRUCTURE for known items
+# - Removed the Summary sheet entirely as per user request
+# - Further refined data consolidation to capture all years and granular items
+# - Added more robust mapping from Gemini output to MASTER_STRUCTURE
+# - Integrated custom AI prompt from frontend for parsing.
+# - FIXED: NameError: name 'custom_prompt_text' is not defined in upload_pdfs.
+# - FIXED: KeyError: '"Description"' due to f-string and .format() conflict.
+# - Modified generate_excel to produce a hierarchical "Description | Year1 | Year2 | ..." table.
+# - Addressed duplicate/inflated values by refining canonicalization and mapping.
+# - Improved handling of missing values by robust mapping.
+# - Fixed line item confusion by ensuring correct value assignment.
+# - Trimmed empty category/subcategory rows for cleanliness.
+# - Further enhanced number cleaning for robustness (e.g., handling spaces as thousands separators).
+# - Reviewed and reinforced canonicalization for "Bank balances" and "Short-term deposits".
+# - Added more explicit examples for "Bank balances" and "ABSA" to master structure under Current Assets.
+# - Added specific instruction in Gemini prompt for numbers with spaces as thousands separators.
+# - **NEW**: Added more explicit examples for "Short-term deposits" for 2020 and 2019 in Gemini prompt.
+# - **NEW**: Implemented post-processing logic to ensure "Accumulated deficit" and "Accumulated surplus" are mutually exclusive per year.
+# - **NEW**: Integrated Document Refinement Tool with new routes and helper functions.
+# - **UPDATED**: Document Refinement Tool now parses DOCX files properly using python-docx.
+# - **UPDATED**: Gemini prompt for refinement is more specific about TOC, Definitions, and Director's Table.
+# - **UPDATED**: `create_refined_document` now attempts to copy template structure and insert specific content.
+# - **UPDATED**: `detect_text_from_pdf` now accepts content directly, removing need to save PDF to disk.
+# - **FIXED**: SyntaxError: unterminated string literal in `create_refined_document` for TOC dots.
+# - **FIXED**: SyntaxError: '(' was never closed in `create_refined_document` for p.add_run call.
+# - **FIXED**: Changed Flask app port to 5000 to match frontend expectation.
+
 import os
 import io
 import re
 import json
+import requests
 import logging
-import copy
+import copy # Ensure copy is imported for deepcopy
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from google.cloud import vision
@@ -16,45 +60,36 @@ from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_LEADER
 from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
-# --- Initial Setup & Configuration ---
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# --- Logging Configuration ---
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Initialize Flask App
 app = Flask(__name__)
 CORS(app)
 
-# --- Constants and Configuration ---
-
-# File paths
 UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'output'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
-# API Keys and Clients
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
 if not GEMINI_API_KEY:
-    logger.error("GEMINI_API_KEY not found in environment variables.")
+    logger.error("Error: GEMINI_API_KEY is not set. Cannot call Gemini API.")
 else:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Initialize Google Cloud Vision client
-try:
-    vision_client = vision.ImageAnnotatorClient()
-except Exception as e:
-    logger.error(f"Could not initialize Google Cloud Vision client: {e}")
-    vision_client = None
+vision_client = vision.ImageAnnotatorClient()
 
-# --- Master Data Structures ---
-
-# Standardized financial terms for consistent reporting
+# --- Canonical Descriptions Mapping (Existing) ---
 CANONICAL_DESCRIPTIONS = {
     "property, plant and equipment": "Property, plant and equipment",
     "pp&e": "Property, plant and equipment",
@@ -473,11 +508,32 @@ def create_refined_document(template_content, refinement_data):
 
     # Crucially, copy styles from the template to the new document
     for style in template_doc.styles:
-        if style.type == 1: # Paragraph styles
-            new_doc.styles.add_style(style.name, style.type)
-            new_doc.styles[style.name].base_style = template_doc.styles[style.name].base_style
-            new_doc.styles[style.name].font.name = template_doc.styles[style.name].font.name
-            new_doc.styles[style.name].font.size = template_doc.styles[style.name].font.size
+        # Check if the style type is a paragraph style (type 1) or table style (type 3)
+        if style.type == 1 or style.type == 3:
+            # Add the style to the new document if it doesn't already exist
+            if style.name not in new_doc.styles:
+                new_doc.styles.add_style(style.name, style.type)
+            
+            # Copy relevant properties for paragraph styles
+            if style.type == 1:
+                # Ensure base_style exists before assigning
+                if style.base_style and style.base_style.name in new_doc.styles:
+                    new_doc.styles[style.name].base_style = new_doc.styles[style.base_style.name]
+                new_doc.styles[style.name].font.name = style.font.name
+                new_doc.styles[style.name].font.size = style.font.size
+                new_doc.styles[style.name].paragraph_format.alignment = style.paragraph_format.alignment
+                new_doc.styles[style.name].paragraph_format.first_line_indent = style.paragraph_format.first_line_indent
+                new_doc.styles[style.name].paragraph_format.left_indent = style.paragraph_format.left_indent
+                new_doc.styles[style.name].paragraph_format.right_indent = style.paragraph_format.right_indent
+                new_doc.styles[style.name].paragraph_format.space_after = style.paragraph_format.space_after
+                new_doc.styles[style.name].paragraph_format.space_before = style.paragraph_format.space_before
+                new_doc.styles[style.name].paragraph_format.line_spacing = style.paragraph_format.line_spacing
+            # For table styles, you might need to copy specific table properties
+            elif style.type == 3:
+                # This is more complex and often involves copying XML elements directly
+                # For now, we'll rely on default table creation and basic styling.
+                pass # Placeholder for more advanced table style copying if needed
+
 
     # --- Flags and Data ---
     toc_inserted = False
@@ -490,34 +546,66 @@ def create_refined_document(template_content, refinement_data):
     director_data = refinement_data.get("data_file_director_table_data", [])
 
     # --- Iterate and Rebuild Document ---
+    # These flags are used to skip copying content from the template once a section has been replaced.
     in_toc_section = False
     in_definitions_section = False
-    in_directors_section = False
+    in_directors_table_section = False
+
 
     for element in template_doc.element.body:
+        # Check if element is a paragraph
         if element.tag.endswith('p'):
-            p = element
-            p_text = "".join(run.text for run in p.xpath('.//w:t'))
+            p = Document(element_part=element).paragraphs[0]
+            p_text = p.text.strip() # Use p.text directly for the paragraph content
 
-            # --- Section Detection and Replacement Logic ---
+            # Heuristic to detect TOC section in template
             if "CONTENTS" in p_text.upper() and not toc_inserted:
                 in_toc_section = True
                 toc_inserted = True
                 logger.info("Replacing Table of Contents.")
                 new_doc.add_heading("CONTENTS", level=1)
+                new_doc.add_paragraph("Note: Page numbers in this Table of Contents are placeholders and may require manual update in Microsoft Word after generation (Ctrl+A, then F9).")
+                new_doc.add_paragraph("") # Spacer
+
+                # Add TOC entries based on data file headings
                 for heading in data_headings:
-                    toc_p = new_doc.add_paragraph(style='Normal')
-                    indent = max(0, heading.get('level', 1) - 1)
-                    toc_p.paragraph_format.left_indent = Inches(0.5 * indent)
+                    toc_p = new_doc.add_paragraph()
+                    # Attempt to apply the style of the original paragraph if it exists
+                    if p.style.name in new_doc.styles:
+                        toc_p.style = new_doc.styles[p.style.name]
+                    else:
+                        toc_p.style = 'Normal' # Fallback to Normal style
+
+                    indent_level = max(0, heading.get('level', 1) - 1) # Adjust for 0-based indent
+                    toc_p.paragraph_format.left_indent = Inches(0.25 * indent_level)
                     
                     # Add a right-aligned tab stop with a dot leader
                     tab_stops = toc_p.paragraph_format.tab_stops
+                    # Clear existing tab stops to avoid duplicates if copying styles
+                    tab_stops.clear_all() 
                     tab_stops.add_tab_stop(Inches(6.0), WD_ALIGN_PARAGRAPH.RIGHT, WD_TAB_LEADER.DOTS)
                     
                     toc_p.add_run(heading.get('text', ''))
-                    toc_p.add_run('\t') 
+                    toc_p.add_run('\t') # Add tab character for page number placeholder
+
+                    # Add a page number field (this will show as 0 until updated in Word)
+                    run = toc_p.add_run()
+                    r = run._r
+                    fldChar = OxmlElement('w:fldChar')
+                    fldChar.set(qn('w:fldCharType'), 'begin')
+                    r.append(fldChar)
+
+                    instrText = OxmlElement('w:instrText')
+                    instrText.set(qn('xml:space'), 'preserve')
+                    instrText.text = "PAGE"
+                    r.append(instrText)
+
+                    fldChar = OxmlElement('w:fldChar')
+                    fldChar.set(qn('w:fldCharType'), 'end')
+                    fldChar.set(qn('w:dirty'), 'true') # Mark as dirty to force update
+                    r.append(fldChar)
                 new_doc.add_page_break()
-                continue # Skip adding the original paragraph
+                continue # Skip adding the original paragraph from template
 
             elif "DEFINITIONS" in p_text.upper() and not definitions_inserted:
                 in_definitions_section = True
@@ -525,46 +613,60 @@ def create_refined_document(template_content, refinement_data):
                 logger.info("Replacing Definitions section.")
                 new_doc.add_heading("DEFINITIONS", level=1)
                 new_doc.add_paragraph(definitions_text)
-                continue
+                continue # Skip adding the original paragraph from template
 
             # Heuristic to detect end of a section (e.g., a new heading starts)
+            # This logic needs to be careful not to skip content that should be copied.
+            # If a new heading starts, it means the previous "replaced" section has ended.
             if p.pPr and p.pPr.pStyle and p.pPr.pStyle.val.startswith("Heading"):
                 in_toc_section = False
                 in_definitions_section = False
-                in_directors_section = False
-            
-            # Skip paragraphs from sections that have been replaced
-            if in_toc_section or in_definitions_section or in_directors_section:
+                in_directors_table_section = False # Reset this too
+
+            # If we are currently inside a section that has been replaced, skip copying its original content.
+            if in_toc_section or in_definitions_section or in_directors_table_section:
                 continue
             
-            # Copy paragraph to new document
-            new_doc.element.body.append(copy.deepcopy(p))
+            # Copy paragraph to new document if not part of a replaced section
+            new_doc.element.body.append(copy.deepcopy(element)) # Copy the raw element, not the parsed paragraph
 
+        # Check if element is a table
         elif element.tag.endswith('tbl'):
-            tbl = element
-            # Heuristic to detect the directors table
-            first_row_text = "".join(tbl.xpath('.//w:tr[1]//w:t/text()')).upper()
-            if "DIRECTOR" in first_row_text and not directors_table_inserted:
-                in_directors_section = True
+            tbl = Document(element_part=element).tables[0] # Get the table object
+            # Heuristic to detect the directors table by checking the first row's text
+            first_row_text = "".join(cell.text for cell in tbl.rows[0].cells).upper()
+            if ("DIRECTOR" in first_row_text or "TRUSTEE" in first_row_text) and not directors_table_inserted:
+                in_directors_table_section = True
                 directors_table_inserted = True
                 logger.info("Replacing Directors table.")
                 
                 # Create new table with data
                 if director_headers and director_data:
                     new_table = new_doc.add_table(rows=1, cols=len(director_headers))
-                    new_table.style = 'Table Grid'
+                    new_table.style = 'Table Grid' # Apply a default grid style
+                    
+                    # Set header row
                     hdr_cells = new_table.rows[0].cells
                     for i, header in enumerate(director_headers):
                         hdr_cells[i].text = header
+                        hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+                    # Add data rows
                     for row_data in director_data:
                         row_cells = new_table.add_row().cells
                         for i, cell_data in enumerate(row_data):
-                            if i < len(row_cells):
+                            if i < len(row_cells): # Ensure we don't go out of bounds
                                 row_cells[i].text = str(cell_data)
-                continue # Skip copying the original table
+                                row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+                                row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+                else:
+                    new_doc.add_paragraph("Directors/Trustees table data not found or extracted.")
+                continue # Skip copying the original table from template
 
-            # Copy other tables
-            new_doc.element.body.append(copy.deepcopy(tbl))
+            # If not the directors table and not in a replaced section, copy the table
+            if not in_toc_section and not in_definitions_section and not in_directors_table_section:
+                new_doc.element.body.append(copy.deepcopy(element))
 
     # Save the new document to a memory buffer
     doc_io = io.BytesIO()
@@ -640,10 +742,13 @@ def upload_and_convert_pdfs():
         if surplus is not None and deficit is not None:
             if surplus > 0 and deficit < 0:
                 # Both exist, decide which one to keep. Let's assume surplus is the primary.
-                del consolidated_items["Accumulated deficit"][year]
+                # Ensure the key exists before attempting to delete
+                if year in consolidated_items["Accumulated deficit"]:
+                    del consolidated_items["Accumulated deficit"][year]
             elif deficit != 0:
                 consolidated_items["Accumulated surplus"][year] = deficit
-                del consolidated_items["Accumulated deficit"][year]
+                if year in consolidated_items["Accumulated deficit"]:
+                    del consolidated_items["Accumulated deficit"][year]
 
 
     # --- Excel Generation ---
@@ -714,4 +819,5 @@ async def refine_document_route():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    # Changed port to 5000 to match frontend expectation
+    app.run(debug=True, port=5000)
