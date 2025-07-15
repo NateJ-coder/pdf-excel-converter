@@ -40,6 +40,7 @@
 # - **FIXED**: SyntaxError: unterminated string literal in `create_refined_document` for TOC dots.
 # - **FIXED**: SyntaxError: '(' was never closed in `create_refined_document` for p.add_run call.
 # - **FIXED**: Changed Flask app port to 5000 to match frontend expectation.
+# - **UPDATED**: Allowed PDF files as templates for document refinement.
 
 import os
 import io
@@ -140,7 +141,7 @@ CANONICAL_DESCRIPTIONS = {
     "csos": "CSOS",
     "cleaning": "Cleaning",
     "depreciation, amortisation and impairments": "Depreciation, amortisation and impairments",
-    "depreciation and amortisation": "Depreciation, amortisation and impairments",
+    "depreciation and amortisation": "Depreciation and amortisation",
     "electricity": "Electricity",
     "employee costs": "Employee costs",
     "garden services": "Garden services",
@@ -780,31 +781,37 @@ async def refine_document_route():
     template_file = request.files['template_file']
     data_file = request.files['data_file']
 
-    if not template_file.filename.lower().endswith(('.doc', '.docx')):
-        return jsonify({"error": "Template file must be a .doc or .docx file."}), 400
+    # Allow .pdf, .doc, .docx for template files
+    allowed_template_extensions = ('.pdf', '.doc', '.docx')
+    if not template_file.filename.lower().endswith(allowed_template_extensions):
+        return jsonify({"error": f"Template file must be one of {', '.join(allowed_template_extensions)}."}), 400
 
     try:
-        template_content = template_file.read()
-        data_file_content = data_file.read()
+        template_content_raw = template_file.read()
+        data_file_content_raw = data_file.read()
 
-        # Extract content from both documents
-        parsed_template = extract_content_from_docx(template_content)
-        parsed_data = extract_text_from_file(data_file_content, data_file.filename)
-        
-        # If data file is docx, use its structured content
-        if parsed_data.get('type') == 'docx':
-            data_to_process = parsed_data.get('content')
+        # Extract content from template file
+        template_extracted_raw = extract_text_from_file(template_content_raw, template_file.filename)
+        if template_extracted_raw.get('type') == 'docx':
+            parsed_template = template_extracted_raw.get('content')
+        else: # pdf or txt (or unknown, but we already filtered for allowed types)
+            parsed_template = {'text': template_extracted_raw.get('text', ''), 'headings': [], 'tables': []}
+
+        # Extract content from data file
+        data_extracted_raw = extract_text_from_file(data_file_content_raw, data_file.filename)
+        if data_extracted_raw.get('type') == 'docx':
+            parsed_data = data_extracted_raw.get('content')
         else: # pdf or txt
-            data_to_process = {'text': parsed_data.get('text', ''), 'headings': [], 'tables': []}
+            parsed_data = {'text': data_extracted_raw.get('text', ''), 'headings': [], 'tables': []}
 
         # Get refinement instructions from AI
-        refinement_instructions = await generate_refinement_instructions_with_gemini(parsed_template, data_to_process)
+        refinement_instructions = await generate_refinement_instructions_with_gemini(parsed_template, parsed_data)
 
         if "Error" in refinement_instructions.get('summary', ''):
              return jsonify({"error": f"AI processing failed: {refinement_instructions['summary']}"}), 500
 
         # Create the new document
-        refined_doc_io = create_refined_document(template_content, refinement_instructions)
+        refined_doc_io = create_refined_document(template_content_raw, refinement_instructions)
 
         return send_file(
             refined_doc_io,
