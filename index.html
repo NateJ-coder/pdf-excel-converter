@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document Processing Suite</title>
+    <title>Multi-PDF to Excel Converter</title>
     <!-- Tailwind CSS CDN for easy styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -260,19 +260,8 @@
 </head>
 <body>
     <div class="container">
-        <!-- Landing Page Section (initially visible) -->
-        <div id="landingPage">
-            <h2 class="text-3xl font-bold text-gray-800 mb-6">Welcome to the Document Processing Suite</h2>
-            <p class="mb-8 text-gray-700">
-                Your all-in-one solution for converting PDFs to Excel and refining documents with AI.
-            </p>
-            <button id="usePdfToExcelBtn" class="btn-primary mb-4">Multi-PDF to Excel Converter</button>
-            <button id="useDocumentRefinementBtn" class="btn-primary mb-4">Document Refinement Tool</button>
-            <button id="aboutLinkLanding" class="btn-secondary">About This Suite</button>
-        </div>
-
-        <!-- Multi-PDF to Excel App Content (initially hidden) -->
-        <div id="pdfToExcelAppContent" class="hidden">
+        <!-- Multi-PDF to Excel App Content (always visible as it's the only tool) -->
+        <div id="pdfToExcelAppContent">
             <h2 class="text-3xl font-bold text-gray-800 mb-6">Multi-PDF to Excel Converter</h2>
 
             <div class="form-group">
@@ -305,95 +294,7 @@
             <button id="convertBtn" class="btn-primary" onclick="startPdfConversion()" disabled>
                 Convert to Excel
             </button>
-            <button id="aboutPdfToExcelBtn" class="btn-secondary mt-4">About PDF to Excel</button>
-            <button id="backToLandingFromPdfAppBtn" class="btn-secondary mt-4">Back to Welcome</button>
-        </div>
-
-        <!-- Document Refinement Tool Content (initially hidden) -->
-        <div id="documentRefinementAppContent" class="hidden">
-            <h2 class="text-3xl font-bold text-gray-800 mb-6">Document Refinement Tool</h2>
-
-            <div class="form-group">
-                <label for="templateFileUpload">Select Template File:</label>
-                <input type="file" id="templateFileUpload" accept=".pdf,.doc,.docx,.txt" onchange="handleTemplateFile(event)" class="block w-full text-sm text-gray-500
-                    file:mr-4 file:py-2 file:px-4
-                    file:rounded-full file:border-0
-                    file:text-sm file:font-semibold
-                    file:bg-indigo-50 file:text-indigo-700
-                    hover:file:bg-indigo-100">
-            </div>
-            <div id="templateFileList" class="file-list-container mt-4 mb-6">
-                <p id="noTemplateFileMessage" class="text-gray-500">No template file selected yet.</p>
-            </div>
-
-            <div class="form-group">
-                <label for="dataFileUpload">Select Data File:</label>
-                <input type="file" id="dataFileUpload" accept=".pdf,.doc,.docx,.txt,.xlsx,.csv" onchange="handleDataFile(event)" class="block w-full text-sm text-gray-500
-                    file:mr-4 file:py-2 file:px-4
-                    file:rounded-full file:border-0
-                    file:text-sm file:font-semibold
-                    file:bg-indigo-50 file:text-indigo-700
-                    hover:file:bg-indigo-100">
-            </div>
-            <div id="dataFileList" class="file-list-container mt-4 mb-6">
-                <p id="noDataFileMessage" class="text-gray-500">No data file selected yet.</p>
-            </div>
-
-            <button id="createDocBtn" class="btn-primary" onclick="startDocumentRefinement()" disabled>
-                Create Refined Document
-            </button>
-            <button id="aboutDocumentRefinementBtn" class="btn-secondary mt-4">About Document Refinement</button>
-            <button id="backToLandingFromRefinementAppBtn" class="btn-secondary mt-4">Back to Welcome</button>
-        </div>
-
-        <!-- About Section for the Entire Suite (initially hidden) -->
-        <div id="aboutSuiteSection" class="hidden text-left">
-            <h2 class="text-3xl font-bold text-gray-800 mb-6">About This Document Processing Suite</h2>
-            <p class="mb-4 text-gray-700">
-                This suite offers powerful tools to manage and transform your documents.
-            </p>
-            <h3 class="text-2xl font-bold text-gray-800 mb-4">Multi-PDF to Excel Converter</h3>
-            <p class="mb-4 text-gray-700">
-                This tool is designed to streamline the process of extracting financial data
-                from multiple PDF financial statements and consolidating it into a single, organized Excel spreadsheet.
-                Leveraging advanced AI (Google's Gemini API) and OCR (Google Cloud Vision API) technologies,
-                it intelligently parses complex financial documents, including:
-            </p>
-            <ul class="list-disc list-inside mb-4 text-gray-700">
-                <li>Statements of Financial Position</li>
-                <li>Statements of Comprehensive Income</li>
-                <li>Notes to the Financial Statements</li>
-            </ul>
-            <p class="mb-4 text-gray-700">
-                Key features include:
-            </p>
-            <ul class="list-disc list-inside mb-4 text-gray-700">
-                <li>Automated data extraction from various financial sections.</li>
-                <li>Consolidation of data from multiple PDFs into one Excel sheet.</li>
-                <li>Hierarchical organization of financial line items (e.g., Assets, Liabilities, Equity, Revenue, Expenses).</li>
-                <li>Year-specific columns for easy comparison across periods.</li>
-                <li>Ability to provide custom AI prompts for tailored data extraction.</li>
-                <li>Robust handling of common financial statement variations and formatting.</li>
-            </ul>
-            <p class="text-gray-700">
-                This tool is ideal for financial analysts, accountants, and anyone who needs to quickly aggregate
-                and analyze financial data from numerous PDF reports.
-            </p>
-            <h3 class="text-2xl font-bold text-gray-800 mb-4 mt-8">Document Refinement Tool</h3>
-            <p class="mb-4 text-gray-700">
-                The Document Refinement Tool allows you to transform documents by applying the layout and structure
-                of a 'template file' to the content of a 'data file'. This is particularly useful for:
-            </p>
-            <ul class="list-disc list-inside mb-4 text-gray-700">
-                <li>Generating reports with consistent branding and formatting.</li>
-                <li>Populating standardized forms with dynamic data.</li>
-                <li>Creating personalized documents from a master template.</li>
-            </ul>
-            <p class="mb-4 text-gray-700">
-                Using Google OCR to extract text and Gemini's AI for intelligent parsing and content insertion,
-                this tool aims to automate the tedious process of manual document reformatting.
-            </p>
-            <button id="backToLandingFromSuiteAboutBtn" class="btn-secondary mt-6">Back to Welcome</button>
+            <button id="aboutPdfToExcelBtn" class="btn-secondary mt-4">About This Converter</button>
         </div>
 
         <!-- About Section for PDF to Excel (initially hidden) -->
@@ -426,51 +327,7 @@
                 and analyze financial data from numerous PDF reports.
             </p>
             <button id="backToPdfToExcelAppBtn" class="btn-secondary mt-6">Back to Converter</button>
-            <button id="backToLandingFromPdfAboutBtn" class="btn-secondary mt-4">Back to Welcome</button>
         </div>
-
-        <!-- About Section for Document Refinement (initially hidden) -->
-        <div id="aboutDocumentRefinementSection" class="hidden text-left">
-            <h2 class="text-3xl font-bold text-gray-800 mb-6">About the Document Refinement Tool</h2>
-            <p class="mb-4 text-gray-700">
-                The Document Refinement Tool allows you to transform documents by applying the layout and structure
-                of a 'template file' to the content of a 'data file'. This is particularly useful for:
-            </p>
-            <ul class="list-disc list-inside mb-4 text-gray-700">
-                <li>Generating reports with consistent branding and formatting.</li>
-                <li>Populating standardized forms with dynamic data.</li>
-                <li>Creating personalized documents from a master template.</li>
-            </ul>
-            <p class="mb-4 text-gray-700">
-                Using Google OCR to extract text and Gemini's AI for intelligent parsing and content insertion,
-                this tool aims to automate the tedious process of manual document reformatting.
-            </p>
-            <p class="text-gray-700">
-                **How it works:**
-            </p>
-            <ol class="list-decimal list-inside mb-4 text-gray-700">
-                <li>
-                    **Upload Template File:** Provide a document (PDF, Word, or Text) that defines the desired layout and structure.
-                    This file acts as the blueprint.
-                </li>
-                <li>
-                    **Upload Data File:** Provide a document (PDF, Word, Text, Excel, or CSV) containing the raw information
-                    you want to insert into the template.
-                </li>
-                <li>
-                    **AI Processing:** Our system will use Google Cloud Vision (OCR) to extract text from both files.
-                    Then, Google's Gemini AI will analyze the template's structure and the data file's content
-                    to intelligently map and insert the data into the template's format.
-                </li>
-                <li>
-                    **Download Refined Document:** Receive a new document with the template's layout populated
-                    with your data.
-                </li>
-            </ol>
-            <button id="backToDocumentRefinementAppBtn" class="btn-secondary mt-6">Back to Refinement Tool</button>
-            <button id="backToLandingFromRefinementAboutBtn" class="btn-secondary mt-4">Back to Welcome</button>
-        </div>
-
 
         <!-- Message Box for Alerts -->
         <div id="messageBoxOverlay" class="message-box-overlay hidden">
@@ -487,23 +344,17 @@
 
     <script>
         let selectedPdfFiles = [];
-        let selectedTemplateFile = null;
-        let selectedDataFile = null;
 
         // Function to show a specific section and hide others
         function showSection(sectionId) {
-            document.getElementById('landingPage').classList.add('hidden');
             document.getElementById('pdfToExcelAppContent').classList.add('hidden');
-            document.getElementById('documentRefinementAppContent').classList.add('hidden');
-            document.getElementById('aboutSuiteSection').classList.add('hidden');
             document.getElementById('aboutPdfToExcelSection').classList.add('hidden');
-            document.getElementById('aboutDocumentRefinementSection').classList.add('hidden');
             document.getElementById(sectionId).classList.remove('hidden');
         }
 
-        // Initial load: show the landing page
+        // Initial load: show the PDF to Excel app content
         document.addEventListener('DOMContentLoaded', () => {
-            showSection('landingPage');
+            showSection('pdfToExcelAppContent');
         });
 
         // --- PDF to Excel Functions ---
@@ -560,16 +411,16 @@
 
             const formData = new FormData();
             selectedPdfFiles.forEach(file => {
-                formData.append('pdfs', file);
+                formData.append('files', file); // Changed from 'pdfs' to 'files' to match app.py
             });
             formData.append('client_name', clientName);
 
             const aiPrompt = document.getElementById('aiPromptInput').value.trim();
             if (aiPrompt) {
-                formData.append('ai_prompt', aiPrompt);
+                formData.append('prompt', aiPrompt); // Changed from 'ai_prompt' to 'prompt' to match app.py
             }
 
-            const backendUrl = 'http://127.0.0.1:5000/upload-pdfs'; // Ensure this matches your Flask server address
+            const backendUrl = 'http://127.0.0.1:5000/upload-and-convert'; // Corrected endpoint for PDF to Excel
 
             try {
                 const response = await fetch(backendUrl, {
@@ -612,127 +463,6 @@
             }
         }
 
-        // --- Document Refinement Functions ---
-        function handleTemplateFile(event) {
-            selectedTemplateFile = event.target.files[0];
-            const fileListDiv = document.getElementById('templateFileList');
-            fileListDiv.innerHTML = ''; // Clear previous list
-
-            if (selectedTemplateFile) {
-                const fileItem = document.createElement('div');
-                fileItem.className = 'file-list-item';
-                fileItem.innerHTML = `
-                    <span>${selectedTemplateFile.name}</span>
-                    <button class="remove-btn" onclick="removeTemplateFile()">Remove</button>
-                `;
-                fileListDiv.appendChild(fileItem);
-            } else {
-                fileListDiv.innerHTML = '<p id="noTemplateFileMessage" class="text-gray-500">No template file selected yet.</p>';
-            }
-            checkRefinementButtonState();
-        }
-
-        function removeTemplateFile() {
-            selectedTemplateFile = null;
-            document.getElementById('templateFileUpload').value = '';
-            document.getElementById('templateFileList').innerHTML = '<p id="noTemplateFileMessage" class="text-gray-500">No template file selected yet.</p>';
-            checkRefinementButtonState();
-        }
-
-        function handleDataFile(event) {
-            selectedDataFile = event.target.files[0];
-            const fileListDiv = document.getElementById('dataFileList');
-            fileListDiv.innerHTML = ''; // Clear previous list
-
-            if (selectedDataFile) {
-                const fileItem = document.createElement('div');
-                fileItem.className = 'file-list-item';
-                fileItem.innerHTML = `
-                    <span>${selectedDataFile.name}</span>
-                    <button class="remove-btn" onclick="removeDataFile()">Remove</button>
-                `;
-                fileListDiv.appendChild(fileItem);
-            } else {
-                fileListDiv.innerHTML = '<p id="noDataFileMessage" class="text-gray-500">No data file selected yet.</p>';
-            }
-            checkRefinementButtonState();
-        }
-
-        function removeDataFile() {
-            selectedDataFile = null;
-            document.getElementById('dataFileUpload').value = '';
-            document.getElementById('dataFileList').innerHTML = '<p id="noDataFileMessage" class="text-gray-500">No data file selected yet.</p>';
-            checkRefinementButtonState();
-        }
-
-        function checkRefinementButtonState() {
-            const createDocBtn = document.getElementById('createDocBtn');
-            if (selectedTemplateFile && selectedDataFile) {
-                createDocBtn.disabled = false;
-            } else {
-                createDocBtn.disabled = true;
-            }
-        }
-
-        async function startDocumentRefinement() {
-            if (!selectedTemplateFile || !selectedDataFile) {
-                showMessageBox("Missing Files", "Please select both a template file and a data file.");
-                return;
-            }
-
-            const createDocBtn = document.getElementById('createDocBtn');
-            const loadingSpinner = document.getElementById('loadingSpinner');
-            createDocBtn.disabled = true;
-            createDocBtn.textContent = 'Creating Document...';
-            loadingSpinner.classList.remove('hidden');
-
-            const formData = new FormData();
-            formData.append('template_file', selectedTemplateFile);
-            formData.append('data_file', selectedDataFile);
-
-            const backendUrl = 'http://127.0.0.1:5000/refine-document'; // New endpoint for refinement tool
-
-            try {
-                const response = await fetch(backendUrl, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (response.ok) {
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    // Determine filename based on template file, or provide a generic one
-                    const outputFileName = `refined_${selectedTemplateFile.name.split('.').slice(0, -1).join('.') || 'document'}.docx`; // Assuming docx output for now
-                    a.download = outputFileName;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    window.URL.revokeObjectURL(url);
-                    showMessageBox("Success!", "Refined document generated and downloaded.");
-                } else {
-                    let errorData = { error: "Unknown error" };
-                    try {
-                        errorData = await response.json();
-                    } catch (jsonError) {
-                        errorData.error = response.statusText;
-                    }
-                    showMessageBox("Error!", `Failed to refine document: ${errorData.error || "Unknown error"}`);
-                    console.error("Backend error:", errorData);
-                }
-            } catch (error) {
-                showMessageBox("Network Error", `Could not connect to the backend server. Please ensure it is running at ${backendUrl}. Error: ${error.message}`);
-                console.error("Fetch error:", error);
-            } finally {
-                loadingSpinner.classList.add('hidden');
-                createDocBtn.disabled = false;
-                createDocBtn.textContent = 'Create Refined Document';
-                removeTemplateFile(); // Clear selected files
-                removeDataFile();
-            }
-        }
-
         // Message Box Functions
         function showMessageBox(title, content) {
             document.getElementById('messageBoxTitle').textContent = title;
@@ -745,63 +475,17 @@
         }
 
         // --- Event Listeners for Navigation ---
-        document.getElementById('usePdfToExcelBtn').addEventListener('click', function() {
-            showSection('pdfToExcelAppContent');
-        });
-
-        document.getElementById('useDocumentRefinementBtn').addEventListener('click', function() {
-            showSection('documentRefinementAppContent');
-        });
-
-        document.getElementById('aboutLinkLanding').addEventListener('click', function() {
-            showSection('aboutSuiteSection');
-        });
-
-        // Back buttons for PDF to Excel
-        document.getElementById('backToLandingFromPdfAppBtn').addEventListener('click', function() {
-            showSection('landingPage');
-        });
         document.getElementById('aboutPdfToExcelBtn').addEventListener('click', function() {
             showSection('aboutPdfToExcelSection');
         });
         document.getElementById('backToPdfToExcelAppBtn').addEventListener('click', function() {
             showSection('pdfToExcelAppContent');
         });
-        document.getElementById('backToLandingFromPdfAboutBtn').addEventListener('click', function() {
-            showSection('landingPage');
-        });
-
-
-        // Back buttons for Document Refinement
-        document.getElementById('backToLandingFromRefinementAppBtn').addEventListener('click', function() {
-            showSection('landingPage');
-        });
-        document.getElementById('aboutDocumentRefinementBtn').addEventListener('click', function() {
-            showSection('aboutDocumentRefinementSection');
-        });
-        document.getElementById('backToDocumentRefinementAppBtn').addEventListener('click', function() {
-            showSection('documentRefinementAppContent');
-        });
-        document.getElementById('backToLandingFromRefinementAboutBtn').addEventListener('click', function() {
-            showSection('landingPage');
-        });
-
-
-        // Back button for Suite About
-        document.getElementById('backToLandingFromSuiteAboutBtn').addEventListener('click', function() {
-            showSection('landingPage');
-        });
-
 
         // Make functions globally accessible for HTML event attributes (if needed, though direct event listeners are preferred)
         window.handlePdfFiles = handlePdfFiles;
         window.removePdfFile = removePdfFile;
         window.startPdfConversion = startPdfConversion;
-        window.handleTemplateFile = handleTemplateFile;
-        window.removeTemplateFile = removeTemplateFile;
-        window.handleDataFile = handleDataFile;
-        window.removeDataFile = removeDataFile;
-        window.startDocumentRefinement = startDocumentRefinement;
         window.showMessageBox = showMessageBox;
         window.hideMessageBox = hideMessageBox;
 
