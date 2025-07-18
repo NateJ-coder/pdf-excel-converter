@@ -33,6 +33,7 @@
 # - **NEW**: Added more explicit examples for "Short-term deposits" for 2020 and 2019 in Gemini prompt.
 # - **NEW**: Implemented post-processing logic to ensure "Accumulated deficit" and "Accumulated surplus" are mutually exclusive per year.
 # - **REMOVED**: Document Refinement Tool and all associated functions and routes.
+# - **HEROKU READY**: Modified app.run() to use Heroku's assigned PORT.
 
 import os
 import io
@@ -60,6 +61,9 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
+# Heroku provides a temporary filesystem, so UPLOAD_FOLDER and OUTPUT_FOLDER
+# are not strictly necessary to create persistent directories, but good for local dev.
+# For Heroku, files are typically processed in-memory or in /tmp.
 UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'output'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -71,6 +75,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 if not GEMINI_API_KEY:
     logger.error("Error: GEMINI_API_KEY is not set. Cannot call Gemini API.")
+    # In a production Heroku app, you might want to raise an error or
+    # have a more robust way to handle missing API keys.
+    # For now, it will just log an error.
 else:
     genai.configure(api_key=GEMINI_API_KEY)
 
@@ -271,10 +278,6 @@ def extract_text_from_pdf(pdf_content):
     except Exception as e:
         logger.error(f"Error during OCR with Google Cloud Vision: {e}")
         raise
-
-# The extract_content_from_docx and extract_text_from_file functions are removed
-# as they were primarily used by the document refinement tool.
-# Keeping extract_text_from_pdf as it's used by the PDF to Excel converter.
 
 def parse_financial_data_with_gemini(text_content, filename, custom_prompt_text=""):
     """Uses Gemini API to parse financial text and return structured JSON."""
@@ -492,5 +495,6 @@ def upload_and_convert_pdfs():
 
 
 if __name__ == '__main__':
-    # Changed port to 5000 to match frontend expectation
-    app.run(debug=True, port=5000)
+    # Get the port from environment variable, default to 5000 for local development
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
