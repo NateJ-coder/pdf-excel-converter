@@ -42,6 +42,9 @@
 # - **FIXED**: Changed Flask app port to 5000 to match frontend expectation.
 # - **UPDATED**: Allowed PDF files as templates for document refinement.
 # - **FIXED**: Re-added missing `extract_text_from_file` function.
+# - **FIXED**: Modified `create_refined_document` to handle PDF templates by creating a new DOCX from extracted content.
+# - **UPDATED**: Refactored `create_refined_document` to insert specific template content into the data file, leaving data file largely unchanged.
+# - **UPDATED**: Gemini prompt for refinement to extract specific content (TOC, Definitions, Director's Table) from the template.
 
 import os
 import io
@@ -49,7 +52,7 @@ import re
 import json
 import requests
 import logging
-import copy # Ensure copy is imported for deepcopy
+import copy
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from google.cloud import vision
@@ -482,34 +485,40 @@ async def generate_refinement_instructions_with_gemini(template_content, data_co
     data_tables_str = "\n---\n".join(["\n".join([" | ".join(map(str, cell)) for cell in table]) for table in data_tables])
 
     prompt = f"""
-    Analyze the provided template and data document extracts. Your task is to extract specific sections from the template and identify corresponding data from the data document to create a refined, merged document.
+    You are an AI assistant specialized in precise document content extraction and transformation.
+    Your task is to analyze a 'template document' and a 'data document' to facilitate creating a new document
+    that uses the data document as its base but incorporates specific content from the template document.
 
-    **From the TEMPLATE document text, extract:**
-    1.  The complete text of the "DEFINITIONS" section.
-    2.  The header row of the "DIRECTORS" or "TRUSTEES" table.
+    **From the TEMPLATE DOCUMENT, extract the following content:**
 
-    **From the DATA document content, extract:**
-    1.  A structured list of all headings to build a new Table of Contents.
-    2.  The data rows from the table that corresponds to the directors/trustees.
+    1.  **"Adoption of MOI" Table:** Locate the table under the heading "Adoption of MOI". Extract its header row and all data rows. The columns are typically "Name of Director", "ID Number", "Signature", "Date". Provide this as an array of arrays.
+    2.  **"Contents" Section:** Extract the full text content of the "CONTENTS" section, including all numbered or bulleted list items and their associated page numbers (if present).
+    3.  **"DEFINITIONS" Section:** Extract the full text content of the "DEFINITIONS" section, including all numbered definitions and their descriptions.
 
-    Provide the output as a single, valid JSON object with these keys:
-    - "template_definitions_text": A string containing the full text of the template's definitions section.
-    - "template_director_table_headers": An array of strings for the director table headers from the template.
-    - "data_file_headings_for_toc": An array of objects, each with "level" (integer) and "text" (string), for headings from the data document.
-    - "data_file_director_table_data": An array of arrays, where each inner array is a row of data for the director's table from the data document.
-    - "summary": A brief summary of the extraction.
+    **From the DATA DOCUMENT, extract (for potential future use, though not directly inserted in this iteration):**
+    1.  A structured list of all headings to build a new Table of Contents (for reference, not insertion).
+    2.  Any table data that corresponds to directors/trustees (for reference, not insertion).
 
-    If a section is not found, return an empty string or empty array for that key.
+    Provide the output as a JSON object with the following keys:
+    - `template_adoption_moi_table_headers`: Array of Strings, the headers of the "Adoption of MOI" table from the template.
+    - `template_adoption_moi_table_data`: Array of Arrays of Strings, the data rows from the "Adoption of MOI" table in the template.
+    - `template_contents_text`: String, the raw text content of the "CONTENTS" section from the template.
+    - `template_definitions_text`: String, the raw text content of the "DEFINITIONS" section from the template.
+    - `data_file_headings_for_toc`: Array of Objects, each with 'level' (integer) and 'text' (string) for headings from the data document (for reference).
+    - `data_file_director_table_data`: Array of Arrays of Strings, any extracted director/trustee data from the data document (for reference).
+    - `summary`: String, a brief summary of the extraction.
+
+    If a section or table is not found, its corresponding field should be an empty string or empty array.
 
     --- TEMPLATE DOCUMENT EXTRACT ---
     {template_text_sample}
     --- END TEMPLATE DOCUMENT EXTRACT ---
 
-    --- DATA DOCUMENT HEADINGS ---
+    --- DATA DOCUMENT HEADINGS (for reference) ---
     {data_headings_str}
     --- END DATA DOCUMENT HEADINGS ---
 
-    --- DATA DOCUMENT TABLES ---
+    --- DATA DOCUMENT TABLES (for reference) ---
     {data_tables_str}
     --- END DATA DOCUMENT TABLES ---
     """
@@ -519,194 +528,90 @@ async def generate_refinement_instructions_with_gemini(template_content, data_co
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
-        # It's good practice to clean the response as it might be wrapped in markdown
         cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
         logger.debug(f"Raw JSON from Gemini (refinement): {cleaned_text[:500]}...")
         return json.loads(cleaned_text)
     except Exception as e:
         logger.error(f"Error in Gemini refinement instruction generation: {e}")
-        # Return a default structure on error
         return {
+            "template_adoption_moi_table_headers": [],
+            "template_adoption_moi_table_data": [],
+            "template_contents_text": "",
             "template_definitions_text": "",
-            "template_director_table_headers": [],
             "data_file_headings_for_toc": [],
             "data_file_director_table_data": [],
             "summary": f"Error during generation: {e}"
         }
 
-def create_refined_document(template_content, refinement_data):
-    """Creates a new DOCX document by merging a template with extracted data."""
-    logger.info("Starting creation of the refined document.")
-    template_doc = Document(io.BytesIO(template_content))
-    new_doc = Document()
+def create_refined_document(original_data_file_bytes, parsed_template_info, refinement_data):
+    """
+    Creates a new DOCX document by taking the original data file as base
+    and appending specific extracted content from the template.
+    """
+    logger.info("Starting creation of the refined document by appending template content.")
 
-    # Crucially, copy styles from the template to the new document
-    for style in template_doc.styles:
-        # Check if the style type is a paragraph style (type 1) or table style (type 3)
-        if style.type == 1 or style.type == 3:
-            # Add the style to the new document if it doesn't already exist
-            if style.name not in new_doc.styles:
-                new_doc.styles.add_style(style.name, style.type)
-            
-            # Copy relevant properties for paragraph styles
-            if style.type == 1:
-                # Ensure base_style exists before assigning
-                if style.base_style and style.base_style.name in new_doc.styles:
-                    new_doc.styles[style.name].base_style = new_doc.styles[style.base_style.name]
-                new_doc.styles[style.name].font.name = style.font.name
-                new_doc.styles[style.name].font.size = style.font.size
-                new_doc.styles[style.name].paragraph_format.alignment = style.paragraph_format.alignment
-                new_doc.styles[style.name].paragraph_format.first_line_indent = style.paragraph_format.first_line_indent
-                new_doc.styles[style.name].paragraph_format.left_indent = style.paragraph_format.left_indent
-                new_doc.styles[style.name].paragraph_format.right_indent = style.paragraph_format.right_indent
-                new_doc.styles[style.name].paragraph_format.space_after = style.paragraph_format.space_after
-                new_doc.styles[style.name].paragraph_format.space_before = style.paragraph_format.space_before
-                new_doc.styles[style.name].paragraph_format.line_spacing = style.paragraph_format.line_spacing
-            # For table styles, you might need to copy specific table properties
-            elif style.type == 3:
-                # This is more complex and often involves copying XML elements directly
-                # For now, we'll rely on default table creation and basic styling.
-                pass # Placeholder for more advanced table style copying if needed
+    # Load the original data file as the base for the new document
+    new_doc = Document(io.BytesIO(original_data_file_bytes))
 
+    # Extract data from refinement_data for easier access
+    template_contents_text = refinement_data.get("template_contents_text", "CONTENTS SECTION NOT FOUND IN TEMPLATE.")
+    template_definitions_text = refinement_data.get("template_definitions_text", "DEFINITIONS SECTION NOT FOUND IN TEMPLATE.")
+    template_adoption_moi_table_headers = refinement_data.get("template_adoption_moi_table_headers", [])
+    template_adoption_moi_table_data = refinement_data.get("template_adoption_moi_table_data", [])
 
-    # --- Flags and Data ---
-    toc_inserted = False
-    definitions_inserted = False
-    directors_table_inserted = False
+    # --- Append Extracted Content from Template to Data File ---
+
+    # 1. Append "Contents" from Template
+    new_doc.add_page_break()
+    new_doc.add_heading("CONTENTS (from Template)", level=1)
+    # Add the raw text of the contents section
+    for line in template_contents_text.split('\n'):
+        if line.strip(): # Only add non-empty lines
+            new_doc.add_paragraph(line.strip())
+    new_doc.add_paragraph("") # Spacer
+
+    # 2. Append "DEFINITIONS" from Template
+    new_doc.add_page_break()
+    new_doc.add_heading("DEFINITIONS (from Template)", level=1)
+    # Add the raw text of the definitions section
+    for line in template_definitions_text.split('\n'):
+        if line.strip(): # Only add non-empty lines
+            new_doc.add_paragraph(line.strip())
+    new_doc.add_paragraph("") # Spacer
+
+    # 3. Append "Adoption of MOI" Table from Template
+    new_doc.add_page_break()
+    new_doc.add_heading("Adoption of MOI (from Template)", level=1)
     
-    data_headings = refinement_data.get("data_file_headings_for_toc", [])
-    definitions_text = refinement_data.get("template_definitions_text", "DEFINITIONS SECTION NOT FOUND.")
-    director_headers = refinement_data.get("template_director_table_headers", [])
-    director_data = refinement_data.get("data_file_director_table_data", [])
+    if template_adoption_moi_table_headers and template_adoption_moi_table_data:
+        new_table = new_doc.add_table(rows=1, cols=len(template_adoption_moi_table_headers))
+        new_table.style = 'Table Grid' # Apply a default grid style
+        
+        # Set header row
+        hdr_cells = new_table.rows[0].cells
+        for i, header in enumerate(template_adoption_moi_table_headers):
+            hdr_cells[i].text = header
+            hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-    # --- Iterate and Rebuild Document ---
-    # These flags are used to skip copying content from the template once a section has been replaced.
-    in_toc_section = False
-    in_definitions_section = False
-    in_directors_table_section = False
+        # Add data rows
+        for row_data in template_adoption_moi_table_data:
+            row_cells = new_table.add_row().cells
+            for i, cell_data in enumerate(row_data):
+                if i < len(row_cells): # Ensure we don't go out of bounds
+                    row_cells[i].text = str(cell_data)
+                    row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+                    row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+    else:
+        new_doc.add_paragraph("Adoption of MOI table data not found or extracted from template.")
+    new_doc.add_paragraph("") # Spacer
 
-
-    for element in template_doc.element.body:
-        # Check if element is a paragraph
-        if element.tag.endswith('p'):
-            p = Document(element_part=element).paragraphs[0]
-            p_text = p.text.strip() # Use p.text directly for the paragraph content
-
-            # Heuristic to detect TOC section in template
-            if "CONTENTS" in p_text.upper() and not toc_inserted:
-                in_toc_section = True
-                toc_inserted = True
-                logger.info("Replacing Table of Contents.")
-                new_doc.add_heading("CONTENTS", level=1)
-                new_doc.add_paragraph("Note: Page numbers in this Table of Contents are placeholders and may require manual update in Microsoft Word after generation (Ctrl+A, then F9).")
-                new_doc.add_paragraph("") # Spacer
-
-                # Add TOC entries based on data file headings
-                for heading in data_headings:
-                    toc_p = new_doc.add_paragraph()
-                    # Attempt to apply the style of the original paragraph if it exists
-                    if p.style.name in new_doc.styles:
-                        toc_p.style = new_doc.styles[p.style.name]
-                    else:
-                        toc_p.style = 'Normal' # Fallback to Normal style
-
-                    indent_level = max(0, heading.get('level', 1) - 1) # Adjust for 0-based indent
-                    toc_p.paragraph_format.left_indent = Inches(0.25 * indent_level)
-                    
-                    # Add a right-aligned tab stop with a dot leader
-                    tab_stops = toc_p.paragraph_format.tab_stops
-                    # Clear existing tab stops to avoid duplicates if copying styles
-                    tab_stops.clear_all() 
-                    tab_stops.add_tab_stop(Inches(6.0), WD_ALIGN_PARAGRAPH.RIGHT, WD_TAB_LEADER.DOTS)
-                    
-                    toc_p.add_run(heading.get('text', ''))
-                    toc_p.add_run('\t') # Add tab character for page number placeholder
-
-                    # Add a page number field (this will show as 0 until updated in Word)
-                    run = toc_p.add_run()
-                    r = run._r
-                    fldChar = OxmlElement('w:fldChar')
-                    fldChar.set(qn('w:fldCharType'), 'begin')
-                    r.append(fldChar)
-
-                    instrText = OxmlElement('w:instrText')
-                    instrText.set(qn('xml:space'), 'preserve')
-                    instrText.text = "PAGE"
-                    r.append(instrText)
-
-                    fldChar = OxmlElement('w:fldChar')
-                    fldChar.set(qn('w:fldCharType'), 'end')
-                    fldChar.set(qn('w:dirty'), 'true') # Mark as dirty to force update
-                    r.append(fldChar)
-                new_doc.add_page_break()
-                continue # Skip adding the original paragraph from template
-
-            elif "DEFINITIONS" in p_text.upper() and not definitions_inserted:
-                in_definitions_section = True
-                definitions_inserted = True
-                logger.info("Replacing Definitions section.")
-                new_doc.add_heading("DEFINITIONS", level=1)
-                new_doc.add_paragraph(definitions_text)
-                continue # Skip adding the original paragraph from template
-
-            # Heuristic to detect end of a section (e.g., a new heading starts)
-            # This logic needs to be careful not to skip content that should be copied.
-            # If a new heading starts, it means the previous "replaced" section has ended.
-            if p.pPr and p.pPr.pStyle and p.pPr.pStyle.val.startswith("Heading"):
-                in_toc_section = False
-                in_definitions_section = False
-                in_directors_table_section = False # Reset this too
-
-            # If we are currently inside a section that has been replaced, skip copying its original content.
-            if in_toc_section or in_definitions_section or in_directors_table_section:
-                continue
-            
-            # Copy paragraph to new document if not part of a replaced section
-            new_doc.element.body.append(copy.deepcopy(element)) # Copy the raw element, not the parsed paragraph
-
-        # Check if element is a table
-        elif element.tag.endswith('tbl'):
-            tbl = Document(element_part=element).tables[0] # Get the table object
-            # Heuristic to detect the directors table by checking the first row's text
-            first_row_text = "".join(cell.text for cell in tbl.rows[0].cells).upper()
-            if ("DIRECTOR" in first_row_text or "TRUSTEE" in first_row_text) and not directors_table_inserted:
-                in_directors_table_section = True
-                directors_table_inserted = True
-                logger.info("Replacing Directors table.")
-                
-                # Create new table with data
-                if director_headers and director_data:
-                    new_table = new_doc.add_table(rows=1, cols=len(director_headers))
-                    new_table.style = 'Table Grid' # Apply a default grid style
-                    
-                    # Set header row
-                    hdr_cells = new_table.rows[0].cells
-                    for i, header in enumerate(director_headers):
-                        hdr_cells[i].text = header
-                        hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                        hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-
-                    # Add data rows
-                    for row_data in director_data:
-                        row_cells = new_table.add_row().cells
-                        for i, cell_data in enumerate(row_data):
-                            if i < len(row_cells): # Ensure we don't go out of bounds
-                                row_cells[i].text = str(cell_data)
-                                row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
-                                row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-                else:
-                    new_doc.add_paragraph("Directors/Trustees table data not found or extracted.")
-                continue # Skip copying the original table from template
-
-            # If not the directors table and not in a replaced section, copy the table
-            if not in_toc_section and not in_definitions_section and not in_directors_table_section:
-                new_doc.element.body.append(copy.deepcopy(element))
 
     # Save the new document to a memory buffer
     doc_io = io.BytesIO()
     new_doc.save(doc_io)
     doc_io.seek(0)
-    logger.info("Refined document created successfully.")
+    logger.info("Refined document created successfully by appending template content to data file.")
     return doc_io
 
 # --- Flask API Routes ---
@@ -815,36 +720,29 @@ async def refine_document_route():
     data_file = request.files['data_file']
 
     # Allow .pdf, .doc, .docx for template files
-    allowed_template_extensions = ('.pdf', '.doc', '.docx')
-    if not template_file.filename.lower().endswith(allowed_template_extensions):
-        return jsonify({"error": f"Template file must be one of {', '.join(allowed_template_extensions)}."}), 400
+    allowed_extensions = ('.pdf', '.doc', '.docx')
+    if not template_file.filename.lower().endswith(allowed_extensions):
+        return jsonify({"error": f"Template file must be one of {', '.join(allowed_extensions)}."}), 400
+    if not data_file.filename.lower().endswith(allowed_extensions):
+        return jsonify({"error": f"Data file must be one of {', '.join(allowed_extensions)}."}), 400
 
     try:
         template_content_raw = template_file.read()
         data_file_content_raw = data_file.read()
 
         # Extract content from template file
-        template_extracted_raw = extract_text_from_file(template_content_raw, template_file.filename)
-        if template_extracted_raw.get('type') == 'docx':
-            parsed_template = template_extracted_raw.get('content')
-        else: # pdf or txt (or unknown, but we already filtered for allowed types)
-            parsed_template = {'text': template_extracted_raw.get('text', ''), 'headings': template_extracted_raw.get('headings', []), 'tables': template_extracted_raw.get('tables', [])}
-
+        parsed_template_content = extract_text_from_file(template_content_raw, template_file.filename)
         # Extract content from data file
-        data_extracted_raw = extract_text_from_file(data_file_content_raw, data_file.filename)
-        if data_extracted_raw.get('type') == 'docx':
-            parsed_data = data_extracted_raw.get('content')
-        else: # pdf or txt
-            parsed_data = {'text': data_extracted_raw.get('text', ''), 'headings': data_extracted_raw.get('headings', []), 'tables': data_extracted_raw.get('tables', [])}
+        parsed_data_content = extract_text_from_file(data_file_content_raw, data_file.filename)
 
         # Get refinement instructions from AI
-        refinement_instructions = await generate_refinement_instructions_with_gemini(parsed_template, parsed_data)
+        refinement_instructions = await generate_refinement_instructions_with_gemini(parsed_template_content, parsed_data_content)
 
         if "Error" in refinement_instructions.get('summary', ''):
              return jsonify({"error": f"AI processing failed: {refinement_instructions['summary']}"}), 500
 
-        # Create the new document
-        refined_doc_io = create_refined_document(template_content_raw, refinement_instructions)
+        # Create the new document by inserting template content into the data file
+        refined_doc_io = create_refined_document(data_file_content_raw, parsed_template_content, refinement_instructions)
 
         return send_file(
             refined_doc_io,
