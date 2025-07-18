@@ -32,21 +32,7 @@
 # - Added specific instruction in Gemini prompt for numbers with spaces as thousands separators.
 # - **NEW**: Added more explicit examples for "Short-term deposits" for 2020 and 2019 in Gemini prompt.
 # - **NEW**: Implemented post-processing logic to ensure "Accumulated deficit" and "Accumulated surplus" are mutually exclusive per year.
-# - **NEW**: Integrated Document Refinement Tool with new routes and helper functions.
-# - **UPDATED**: Document Refinement Tool now parses DOCX files properly using python-docx.
-# - **UPDATED**: Gemini prompt for refinement is more specific about TOC, Definitions, and Director's Table.
-# - **UPDATED**: `create_refined_document` now attempts to copy template structure and insert specific content.
-# - **UPDATED**: `detect_text_from_pdf` now accepts content directly, removing need to save PDF to disk.
-# - **FIXED**: SyntaxError: unterminated string literal in `create_refined_document` for TOC dots.
-# - **FIXED**: SyntaxError: '(' was never closed in `create_refined_document` for p.add_run call.
-# - **FIXED**: Changed Flask app port to 5000 to match frontend expectation.
-# - **UPDATED**: Allowed PDF files as templates for document refinement.
-# - **FIXED**: Re-added missing `extract_text_from_file` function.
-# - **FIXED**: Modified `create_refined_document` to handle PDF templates by creating a new DOCX from extracted content.
-# - **UPDATED**: Refactored `create_refined_document` to insert specific template content into the data file, leaving data file largely unchanged.
-# - **UPDATED**: Gemini prompt for refinement to extract specific content (TOC, Definitions, Director's Table) from the template.
-# - **FIXED**: Improved Gemini prompt for refinement to ensure complete extraction of Contents, Definitions, and Director's Table data.
-# - **FIXED**: Enhanced `create_refined_document` to insert extracted content more accurately, preserving structure for text and correctly populating tables.
+# - **REMOVED**: Document Refinement Tool and all associated functions and routes.
 
 import os
 import io
@@ -63,12 +49,6 @@ import google.generativeai as genai
 from openpyxl import Workbook
 from openpyxl.styles import Font, Border, Side, Alignment, PatternFill, numbers
 from openpyxl.utils import get_column_letter
-from docx import Document
-from docx.shared import Inches, Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_LEADER
-from docx.enum.table import WD_ALIGN_VERTICAL
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
 
 
 load_dotenv()
@@ -292,61 +272,9 @@ def extract_text_from_pdf(pdf_content):
         logger.error(f"Error during OCR with Google Cloud Vision: {e}")
         raise
 
-def extract_content_from_docx(docx_content):
-    """Extracts text, headings, and tables from a DOCX file's content."""
-    logger.info("Extracting content from DOCX file.")
-    doc = Document(io.BytesIO(docx_content))
-    content = {
-        'text': "\n".join([p.text for p in doc.paragraphs]),
-        'headings': [],
-        'tables': []
-    }
-    for p in doc.paragraphs:
-        if p.style and p.style.name.startswith('Heading'):
-            try:
-                level = int(p.style.name.split(' ')[-1])
-                content['headings'].append({'level': level, 'text': p.text})
-            except (ValueError, IndexError):
-                pass # Ignore styles that don't conform to "Heading X"
-    
-    for table in doc.tables:
-        table_data = [[cell.text for cell in row.cells] for row in table.rows]
-        content['tables'].append(table_data)
-
-    logger.info("Finished extracting content from DOCX.")
-    return content
-
-def extract_text_from_file(file_content, filename):
-    """
-    Extracts text and structured content from various file types.
-    For DOCX, it uses python-docx for better parsing.
-    For PDF, it uses Google Cloud Vision.
-    For TXT, it decodes directly.
-    """
-    logger.info(f"Attempting to extract content from {filename}...")
-    if filename.lower().endswith('.pdf'):
-        # For PDF, we only get text, no structured headings/tables directly via this path
-        return {'text': extract_text_from_pdf(file_content), 'type': 'pdf', 'headings': [], 'tables': []}
-    elif filename.lower().endswith(('.doc', '.docx')):
-        try:
-            # For DOCX, we get text, headings, and tables
-            docx_parsed_content = extract_content_from_docx(file_content)
-            return {'content': docx_parsed_content, 'type': 'docx', 'text': docx_parsed_content['text'], 'headings': docx_parsed_content['headings'], 'tables': docx_parsed_content['tables']}
-        except Exception as e:
-            logger.warning(f"Failed to parse DOCX with python-docx for {filename}: {e}. Falling back to basic text decode.")
-            try:
-                return {'text': file_content.decode('utf-8'), 'type': 'text', 'headings': [], 'tables': []}
-            except UnicodeDecodeError:
-                return {'text': file_content.decode('latin-1'), 'type': 'text', 'headings': [], 'tables': []}
-    elif filename.lower().endswith('.txt'):
-        try:
-            return {'text': file_content.decode('utf-8'), 'type': 'text', 'headings': [], 'tables': []}
-        except UnicodeDecodeError:
-            return {'text': file_content.decode('latin-1'), 'type': 'text', 'headings': [], 'tables': []}
-    else:
-        logger.warning(f"Unsupported file type for text extraction: {filename}")
-        return {'text': None, 'type': 'unknown', 'headings': [], 'tables': []}
-
+# The extract_content_from_docx and extract_text_from_file functions are removed
+# as they were primarily used by the document refinement tool.
+# Keeping extract_text_from_pdf as it's used by the PDF to Excel converter.
 
 def parse_financial_data_with_gemini(text_content, filename, custom_prompt_text=""):
     """Uses Gemini API to parse financial text and return structured JSON."""
@@ -469,187 +397,6 @@ def generate_excel_report(all_items, all_years):
     logger.info("Excel report generated successfully.")
     return wb
 
-# --- Document Refinement Functions ---
-
-async def generate_refinement_instructions_with_gemini(template_content, data_content):
-    """Generates instructions for document refinement using Gemini."""
-    logger.info("Generating document refinement instructions with Gemini.")
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY is not set.")
-
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
-
-    template_text_sample = template_content.get('text', '')[:4000]
-    data_headings = data_content.get('headings', [])
-    data_tables = data_content.get('tables', [])
-
-    data_headings_str = "\n".join([f"Level {h['level']}: {h['text']}" for h in data_headings])
-    data_tables_str = "\n---\n".join(["\n".join([" | ".join(map(str, cell)) for cell in table]) for table in data_tables])
-
-    prompt = f"""
-    You are an AI assistant specialized in precise document content extraction and transformation.
-    Your task is to analyze a 'template document' and a 'data document' to facilitate creating a new document
-    that uses the data document as its base but incorporates specific content from the template document.
-
-    **From the TEMPLATE DOCUMENT, extract the following content:**
-
-    1.  **"Adoption of MOI" Table:** Locate the table under the heading "Adoption of MOI". Extract its header row and all data rows. The columns are typically "Name of Director", "ID Number", "Signature", "Date". Provide this as an array of arrays.
-    2.  **"Contents" Section:** Extract the full text content of the "CONTENTS" section, including all numbered or bulleted list items and their associated page numbers (if present). Preserve the original formatting, including dot leaders and page numbers. Provide this as a single, raw string.
-    3.  **"DEFINITIONS" Section:** Extract the full text content of the "DEFINITIONS" section. This includes the introductory paragraph and every numbered definition with its complete description, preserving all original formatting, numbering, and line breaks. Provide this as a single, raw string.
-
-    **From the DATA DOCUMENT, extract:**
-    1.  A structured list of all headings to build a new Table of Contents. Each object should have 'level' (integer) and 'text' (string). Include all heading levels.
-
-    Provide the output as a JSON object with the following keys:
-    - `template_adoption_moi_table_headers`: Array of Strings, the headers of the "Adoption of MOI" table from the template.
-    - `template_adoption_moi_table_data`: Array of Arrays of Strings, the data rows from the "Adoption of MOI" table in the template.
-    - `template_contents_text`: String, the raw text content of the "CONTENTS" section from the template, preserving all formatting.
-    - `template_definitions_text`: String, the raw text content of the "DEFINITIONS" section from the template, preserving all formatting and complete definitions.
-    - `data_file_headings_for_toc`: Array of Objects, each with 'level' (integer) and 'text' (string) for headings from the data document.
-    - `summary`: String, a brief summary of the extraction.
-
-    If a section or table is not found, its corresponding field should be an empty string or empty array.
-
-    --- TEMPLATE DOCUMENT EXTRACT ---
-    {template_text_sample}
-    --- END TEMPLATE DOCUMENT EXTRACT ---
-
-    --- DATA DOCUMENT HEADINGS (for TOC generation) ---
-    {data_headings_str}
-    --- END DATA DOCUMENT HEADINGS ---
-    """
-    
-    try:
-        response = await model.generate_content_async(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
-        )
-        cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
-        logger.debug(f"Raw JSON from Gemini (refinement): {cleaned_text[:500]}...")
-        return json.loads(cleaned_text)
-    except Exception as e:
-        logger.error(f"Error in Gemini refinement instruction generation: {e}")
-        return {
-            "template_adoption_moi_table_headers": [],
-            "template_adoption_moi_table_data": [],
-            "template_contents_text": "",
-            "template_definitions_text": "",
-            "data_file_headings_for_toc": [],
-            "summary": f"Error during generation: {e}"
-        }
-
-def create_refined_document(original_data_file_bytes, parsed_template_info, refinement_data):
-    """
-    Creates a new DOCX document by taking the original data file as base
-    and appending specific extracted content from the template.
-    """
-    logger.info("Starting creation of the refined document by appending template content.")
-
-    # Load the original data file as the base for the new document
-    new_doc = Document(io.BytesIO(original_data_file_bytes))
-
-    # Extract data from refinement_data for easier access
-    template_contents_text = refinement_data.get("template_contents_text", "CONTENTS SECTION NOT FOUND IN TEMPLATE.")
-    template_definitions_text = refinement_data.get("template_definitions_text", "DEFINITIONS SECTION NOT FOUND IN TEMPLATE.")
-    template_adoption_moi_table_headers = refinement_data.get("template_adoption_moi_table_headers", [])
-    template_adoption_moi_table_data = refinement_data.get("template_adoption_moi_table_data", [])
-    data_file_headings_for_toc = refinement_data.get("data_file_headings_for_toc", [])
-
-
-    # --- Append Extracted Content from Template to Data File ---
-
-    # 1. Append "Contents" (Table of Contents) generated from Data File headings + Definitions entry
-    new_doc.add_page_break()
-    new_doc.add_heading("CONTENTS", level=1)
-    new_doc.add_paragraph("Note: Page numbers in this Table of Contents are placeholders and may require manual update in Microsoft Word after generation (Ctrl+A, then F9).")
-    new_doc.add_paragraph("") # Spacer
-
-    # Combine data file headings and ensure "DEFINITIONS" is present
-    combined_headings = []
-    definitions_added = False
-    for heading in data_file_headings_for_toc:
-        combined_headings.append(heading)
-        if "definitions" in heading['text'].lower():
-            definitions_added = True
-    
-    if not definitions_added:
-        # Add a placeholder for Definitions if not found as a formal heading in data file
-        combined_headings.append({'level': 1, 'text': 'DEFINITIONS'})
-
-    # Sort headings by level and then text for a clean TOC
-    combined_headings.sort(key=lambda x: (x['level'], x['text']))
-
-    for heading in combined_headings:
-        toc_p = new_doc.add_paragraph()
-        indent_level = max(0, heading.get('level', 1) - 1)
-        toc_p.paragraph_format.left_indent = Inches(0.25 * indent_level)
-        
-        tab_stops = toc_p.paragraph_format.tab_stops
-        tab_stops.clear_all() 
-        tab_stops.add_tab_stop(Inches(6.0), WD_ALIGN_PARAGRAPH.RIGHT, WD_TAB_LEADER.DOTS)
-        
-        toc_p.add_run(heading.get('text', ''))
-        toc_p.add_run('\t')
-
-        run = toc_p.add_run()
-        r = run._r
-        fldChar = OxmlElement('w:fldChar')
-        fldChar.set(qn('w:fldCharType'), 'begin')
-        r.append(fldChar)
-        instrText = OxmlElement('w:instrText')
-        instrText.set(qn('xml:space'), 'preserve')
-        instrText.text = "PAGE"
-        r.append(instrText)
-        fldChar = OxmlElement('w:fldChar')
-        fldChar.set(qn('w:fldCharType'), 'end')
-        fldChar.set(qn('w:dirty'), 'true')
-        r.append(fldChar)
-    new_doc.add_paragraph("") # Spacer
-
-    # 2. Append "DEFINITIONS" from Template (full text)
-    new_doc.add_page_break()
-    new_doc.add_heading("DEFINITIONS (from Template)", level=1)
-    # Add the raw text of the definitions section, preserving line breaks and structure
-    for line in template_definitions_text.split('\n'):
-        if line.strip(): # Only add non-empty lines
-            new_doc.add_paragraph(line) # Add line directly to preserve original spacing/indentation from raw text
-    new_doc.add_paragraph("") # Spacer
-
-    # 3. Append "Adoption of MOI" Table from Template
-    new_doc.add_page_break()
-    new_doc.add_heading("Adoption of MOI (from Template)", level=1)
-    
-    if template_adoption_moi_table_headers and template_adoption_moi_table_data:
-        new_table = new_doc.add_table(rows=1, cols=len(template_adoption_moi_table_headers))
-        new_table.style = 'Table Grid' # Apply a default grid style
-        
-        # Set header row
-        hdr_cells = new_table.rows[0].cells
-        for i, header in enumerate(template_adoption_moi_table_headers):
-            hdr_cells[i].text = header
-            hdr_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-
-        # Add data rows
-        for row_data in template_adoption_moi_table_data:
-            row_cells = new_table.add_row().cells
-            for i, cell_data in enumerate(row_data):
-                if i < len(row_cells): # Ensure we don't go out of bounds
-                    row_cells[i].text = str(cell_data)
-                    row_cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
-                    row_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-    else:
-        new_doc.add_paragraph("Adoption of MOI table data not found or extracted from template.")
-    new_doc.add_paragraph("") # Spacer
-
-
-    # Save the new document to a memory buffer
-    doc_io = io.BytesIO()
-    new_doc.save(doc_io)
-    doc_io.seek(0)
-    logger.info("Refined document created successfully by appending template content to data file.")
-    return doc_io
-
 # --- Flask API Routes ---
 
 @app.route('/upload-and-convert', methods=['POST'])
@@ -742,55 +489,6 @@ def upload_and_convert_pdfs():
     except Exception as e:
         logger.error(f"Failed to generate Excel file: {e}")
         return jsonify({"error": "Failed to generate the Excel file."}), 500
-
-
-@app.route('/refine-document', methods=['POST'])
-async def refine_document_route():
-    """
-    API endpoint to refine a document using a template and a data file.
-    """
-    if 'template_file' not in request.files or 'data_file' not in request.files:
-        return jsonify({"error": "Both a template file and a data file are required."}), 400
-
-    template_file = request.files['template_file']
-    data_file = request.files['data_file']
-
-    # Allow .pdf, .doc, .docx for template files
-    allowed_extensions = ('.pdf', '.doc', '.docx')
-    if not template_file.filename.lower().endswith(allowed_extensions):
-        return jsonify({"error": f"Template file must be one of {', '.join(allowed_extensions)}."}), 400
-    if not data_file.filename.lower().endswith(allowed_extensions):
-        return jsonify({"error": f"Data file must be one of {', '.join(allowed_extensions)}."}), 400
-
-    try:
-        template_content_raw = template_file.read()
-        data_file_content_raw = data_file.read()
-
-        # Extract content from template file
-        parsed_template_content = extract_text_from_file(template_content_raw, template_file.filename)
-        # Extract content from data file
-        parsed_data_content = extract_text_from_file(data_file_content_raw, data_file.filename)
-
-        # Get refinement instructions from AI
-        refinement_instructions = await generate_refinement_instructions_with_gemini(parsed_template_content, parsed_data_content)
-
-        if "Error" in refinement_instructions.get('summary', ''):
-             return jsonify({"error": f"AI processing failed: {refinement_instructions['summary']}"}), 500
-
-        # Create the new document by inserting template content into the data file
-        # Pass the raw data file content and the parsed template info
-        refined_doc_io = create_refined_document(data_file_content_raw, parsed_template_content, refinement_instructions)
-
-        return send_file(
-            refined_doc_io,
-            as_attachment=True,
-            download_name='refined_document.docx',
-            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        )
-
-    except Exception as e:
-        logger.error(f"An error occurred during document refinement: {e}", exc_info=True)
-        return jsonify({"error": f"An internal error occurred: {str(e)}"}), 500
 
 
 if __name__ == '__main__':
