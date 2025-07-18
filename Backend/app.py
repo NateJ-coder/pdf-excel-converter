@@ -41,6 +41,7 @@
 # - **FIXED**: SyntaxError: '(' was never closed in `create_refined_document` for p.add_run call.
 # - **FIXED**: Changed Flask app port to 5000 to match frontend expectation.
 # - **UPDATED**: Allowed PDF files as templates for document refinement.
+# - **FIXED**: Re-added missing `extract_text_from_file` function.
 
 import os
 import io
@@ -309,6 +310,38 @@ def extract_content_from_docx(docx_content):
 
     logger.info("Finished extracting content from DOCX.")
     return content
+
+def extract_text_from_file(file_content, filename):
+    """
+    Extracts text and structured content from various file types.
+    For DOCX, it uses python-docx for better parsing.
+    For PDF, it uses Google Cloud Vision.
+    For TXT, it decodes directly.
+    """
+    logger.info(f"Attempting to extract content from {filename}...")
+    if filename.lower().endswith('.pdf'):
+        # For PDF, we only get text, no structured headings/tables directly via this path
+        return {'text': extract_text_from_pdf(file_content), 'type': 'pdf', 'headings': [], 'tables': []}
+    elif filename.lower().endswith(('.doc', '.docx')):
+        try:
+            # For DOCX, we get text, headings, and tables
+            docx_parsed_content = extract_content_from_docx(file_content)
+            return {'content': docx_parsed_content, 'type': 'docx', 'text': docx_parsed_content['text'], 'headings': docx_parsed_content['headings'], 'tables': docx_parsed_content['tables']}
+        except Exception as e:
+            logger.warning(f"Failed to parse DOCX with python-docx for {filename}: {e}. Falling back to basic text decode.")
+            try:
+                return {'text': file_content.decode('utf-8'), 'type': 'text', 'headings': [], 'tables': []}
+            except UnicodeDecodeError:
+                return {'text': file_content.decode('latin-1'), 'type': 'text', 'headings': [], 'tables': []}
+    elif filename.lower().endswith('.txt'):
+        try:
+            return {'text': file_content.decode('utf-8'), 'type': 'text', 'headings': [], 'tables': []}
+        except UnicodeDecodeError:
+            return {'text': file_content.decode('latin-1'), 'type': 'text', 'headings': [], 'tables': []}
+    else:
+        logger.warning(f"Unsupported file type for text extraction: {filename}")
+        return {'text': None, 'type': 'unknown', 'headings': [], 'tables': []}
+
 
 def parse_financial_data_with_gemini(text_content, filename, custom_prompt_text=""):
     """Uses Gemini API to parse financial text and return structured JSON."""
@@ -795,14 +828,14 @@ async def refine_document_route():
         if template_extracted_raw.get('type') == 'docx':
             parsed_template = template_extracted_raw.get('content')
         else: # pdf or txt (or unknown, but we already filtered for allowed types)
-            parsed_template = {'text': template_extracted_raw.get('text', ''), 'headings': [], 'tables': []}
+            parsed_template = {'text': template_extracted_raw.get('text', ''), 'headings': template_extracted_raw.get('headings', []), 'tables': template_extracted_raw.get('tables', [])}
 
         # Extract content from data file
         data_extracted_raw = extract_text_from_file(data_file_content_raw, data_file.filename)
         if data_extracted_raw.get('type') == 'docx':
             parsed_data = data_extracted_raw.get('content')
         else: # pdf or txt
-            parsed_data = {'text': data_extracted_raw.get('text', ''), 'headings': [], 'tables': []}
+            parsed_data = {'text': data_extracted_raw.get('text', ''), 'headings': data_extracted_raw.get('headings', []), 'tables': data_extracted_raw.get('tables', [])}
 
         # Get refinement instructions from AI
         refinement_instructions = await generate_refinement_instructions_with_gemini(parsed_template, parsed_data)
