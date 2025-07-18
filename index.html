@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-PDF to Excel Converter</title>
-    <!-- Tailwind CSS CDN for easy styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         /* Custom styles for the Inter font and overall layout */
@@ -260,7 +259,6 @@
 </head>
 <body>
     <div class="container">
-        <!-- Multi-PDF to Excel App Content (always visible as it's the only tool) -->
         <div id="pdfToExcelAppContent">
             <h2 class="text-3xl font-bold text-gray-800 mb-6">Multi-PDF to Excel Converter</h2>
 
@@ -283,7 +281,6 @@
                 <p id="noPdfFilesMessage" class="text-gray-500">No files selected yet.</p>
             </div>
 
-            <!-- New: AI Prompt Input Field -->
             <div class="form-group">
                 <label for="aiPromptInput">Custom AI Prompt (Optional):</label>
                 <textarea id="aiPromptInput" rows="5" placeholder="Describe how you want the Excel data structured. E.g., 'Extract only assets and liabilities, grouped by current and non-current, and include only the latest year.' This will refine the default parsing instructions."
@@ -297,7 +294,6 @@
             <button id="aboutPdfToExcelBtn" class="btn-secondary mt-4">About This Converter</button>
         </div>
 
-        <!-- About Section for PDF to Excel (initially hidden) -->
         <div id="aboutPdfToExcelSection" class="hidden text-left">
             <h2 class="text-3xl font-bold text-gray-800 mb-6">About the Multi-PDF to Excel Converter</h2>
             <p class="mb-4 text-gray-700">
@@ -329,7 +325,6 @@
             <button id="backToPdfToExcelAppBtn" class="btn-secondary mt-6">Back to Converter</button>
         </div>
 
-        <!-- Message Box for Alerts -->
         <div id="messageBoxOverlay" class="message-box-overlay hidden">
             <div class="message-box">
                 <h3 id="messageBoxTitle"></h3>
@@ -338,7 +333,6 @@
             </div>
         </div>
 
-        <!-- Loading Spinner -->
         <div id="loadingSpinner" class="loading-spinner hidden"></div>
     </div>
 
@@ -420,7 +414,7 @@
                 formData.append('prompt', aiPrompt); // Changed from 'ai_prompt' to 'prompt' to match app.py
             }
 
-            const backendUrl = 'http://127.0.0.1:5000/upload-and-convert'; // Corrected endpoint for PDF to Excel
+            const backendUrl = 'https://pdf-to-excel-123-b57ac31a2677.herokuapp.com/upload-and-convert'; // Corrected endpoint for PDF to Excel
 
             try {
                 const response = await fetch(backendUrl, {
