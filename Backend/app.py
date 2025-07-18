@@ -45,6 +45,8 @@
 # - **FIXED**: Modified `create_refined_document` to handle PDF templates by creating a new DOCX from extracted content.
 # - **UPDATED**: Refactored `create_refined_document` to insert specific template content into the data file, leaving data file largely unchanged.
 # - **UPDATED**: Gemini prompt for refinement to extract specific content (TOC, Definitions, Director's Table) from the template.
+# - **FIXED**: Improved Gemini prompt for refinement to ensure complete extraction of Contents, Definitions, and Director's Table data.
+# - **FIXED**: Enhanced `create_refined_document` to insert extracted content more accurately, preserving structure for text and correctly populating tables.
 
 import os
 import io
@@ -192,8 +194,8 @@ CANONICAL_DESCRIPTIONS = {
     "movements in provisions": "Movements in provisions",
     "changes in working capital": "Changes in working capital",
     "net provisions": "Net provisions",
-    "non provision of tax": "Non provision of tax",
     "taxation": "Taxation",
+    "non provision of tax": "Non provision of tax",
     "cash generated from (used in) operations": "Cash generated from (used in) operations",
     "basic": "Basic (Employee Cost)",
     "uif": "UIF (Employee Cost)",
@@ -492,20 +494,18 @@ async def generate_refinement_instructions_with_gemini(template_content, data_co
     **From the TEMPLATE DOCUMENT, extract the following content:**
 
     1.  **"Adoption of MOI" Table:** Locate the table under the heading "Adoption of MOI". Extract its header row and all data rows. The columns are typically "Name of Director", "ID Number", "Signature", "Date". Provide this as an array of arrays.
-    2.  **"Contents" Section:** Extract the full text content of the "CONTENTS" section, including all numbered or bulleted list items and their associated page numbers (if present).
-    3.  **"DEFINITIONS" Section:** Extract the full text content of the "DEFINITIONS" section, including all numbered definitions and their descriptions.
+    2.  **"Contents" Section:** Extract the full text content of the "CONTENTS" section, including all numbered or bulleted list items and their associated page numbers (if present). Preserve the original formatting, including dot leaders and page numbers. Provide this as a single, raw string.
+    3.  **"DEFINITIONS" Section:** Extract the full text content of the "DEFINITIONS" section. This includes the introductory paragraph and every numbered definition with its complete description, preserving all original formatting, numbering, and line breaks. Provide this as a single, raw string.
 
-    **From the DATA DOCUMENT, extract (for potential future use, though not directly inserted in this iteration):**
-    1.  A structured list of all headings to build a new Table of Contents (for reference, not insertion).
-    2.  Any table data that corresponds to directors/trustees (for reference, not insertion).
+    **From the DATA DOCUMENT, extract:**
+    1.  A structured list of all headings to build a new Table of Contents. Each object should have 'level' (integer) and 'text' (string). Include all heading levels.
 
     Provide the output as a JSON object with the following keys:
     - `template_adoption_moi_table_headers`: Array of Strings, the headers of the "Adoption of MOI" table from the template.
     - `template_adoption_moi_table_data`: Array of Arrays of Strings, the data rows from the "Adoption of MOI" table in the template.
-    - `template_contents_text`: String, the raw text content of the "CONTENTS" section from the template.
-    - `template_definitions_text`: String, the raw text content of the "DEFINITIONS" section from the template.
-    - `data_file_headings_for_toc`: Array of Objects, each with 'level' (integer) and 'text' (string) for headings from the data document (for reference).
-    - `data_file_director_table_data`: Array of Arrays of Strings, any extracted director/trustee data from the data document (for reference).
+    - `template_contents_text`: String, the raw text content of the "CONTENTS" section from the template, preserving all formatting.
+    - `template_definitions_text`: String, the raw text content of the "DEFINITIONS" section from the template, preserving all formatting and complete definitions.
+    - `data_file_headings_for_toc`: Array of Objects, each with 'level' (integer) and 'text' (string) for headings from the data document.
     - `summary`: String, a brief summary of the extraction.
 
     If a section or table is not found, its corresponding field should be an empty string or empty array.
@@ -514,13 +514,9 @@ async def generate_refinement_instructions_with_gemini(template_content, data_co
     {template_text_sample}
     --- END TEMPLATE DOCUMENT EXTRACT ---
 
-    --- DATA DOCUMENT HEADINGS (for reference) ---
+    --- DATA DOCUMENT HEADINGS (for TOC generation) ---
     {data_headings_str}
     --- END DATA DOCUMENT HEADINGS ---
-
-    --- DATA DOCUMENT TABLES (for reference) ---
-    {data_tables_str}
-    --- END DATA DOCUMENT TABLES ---
     """
     
     try:
@@ -539,7 +535,6 @@ async def generate_refinement_instructions_with_gemini(template_content, data_co
             "template_contents_text": "",
             "template_definitions_text": "",
             "data_file_headings_for_toc": [],
-            "data_file_director_table_data": [],
             "summary": f"Error during generation: {e}"
         }
 
@@ -558,25 +553,66 @@ def create_refined_document(original_data_file_bytes, parsed_template_info, refi
     template_definitions_text = refinement_data.get("template_definitions_text", "DEFINITIONS SECTION NOT FOUND IN TEMPLATE.")
     template_adoption_moi_table_headers = refinement_data.get("template_adoption_moi_table_headers", [])
     template_adoption_moi_table_data = refinement_data.get("template_adoption_moi_table_data", [])
+    data_file_headings_for_toc = refinement_data.get("data_file_headings_for_toc", [])
+
 
     # --- Append Extracted Content from Template to Data File ---
 
-    # 1. Append "Contents" from Template
+    # 1. Append "Contents" (Table of Contents) generated from Data File headings + Definitions entry
     new_doc.add_page_break()
-    new_doc.add_heading("CONTENTS (from Template)", level=1)
-    # Add the raw text of the contents section
-    for line in template_contents_text.split('\n'):
-        if line.strip(): # Only add non-empty lines
-            new_doc.add_paragraph(line.strip())
+    new_doc.add_heading("CONTENTS", level=1)
+    new_doc.add_paragraph("Note: Page numbers in this Table of Contents are placeholders and may require manual update in Microsoft Word after generation (Ctrl+A, then F9).")
     new_doc.add_paragraph("") # Spacer
 
-    # 2. Append "DEFINITIONS" from Template
+    # Combine data file headings and ensure "DEFINITIONS" is present
+    combined_headings = []
+    definitions_added = False
+    for heading in data_file_headings_for_toc:
+        combined_headings.append(heading)
+        if "definitions" in heading['text'].lower():
+            definitions_added = True
+    
+    if not definitions_added:
+        # Add a placeholder for Definitions if not found as a formal heading in data file
+        combined_headings.append({'level': 1, 'text': 'DEFINITIONS'})
+
+    # Sort headings by level and then text for a clean TOC
+    combined_headings.sort(key=lambda x: (x['level'], x['text']))
+
+    for heading in combined_headings:
+        toc_p = new_doc.add_paragraph()
+        indent_level = max(0, heading.get('level', 1) - 1)
+        toc_p.paragraph_format.left_indent = Inches(0.25 * indent_level)
+        
+        tab_stops = toc_p.paragraph_format.tab_stops
+        tab_stops.clear_all() 
+        tab_stops.add_tab_stop(Inches(6.0), WD_ALIGN_PARAGRAPH.RIGHT, WD_TAB_LEADER.DOTS)
+        
+        toc_p.add_run(heading.get('text', ''))
+        toc_p.add_run('\t')
+
+        run = toc_p.add_run()
+        r = run._r
+        fldChar = OxmlElement('w:fldChar')
+        fldChar.set(qn('w:fldCharType'), 'begin')
+        r.append(fldChar)
+        instrText = OxmlElement('w:instrText')
+        instrText.set(qn('xml:space'), 'preserve')
+        instrText.text = "PAGE"
+        r.append(instrText)
+        fldChar = OxmlElement('w:fldChar')
+        fldChar.set(qn('w:fldCharType'), 'end')
+        fldChar.set(qn('w:dirty'), 'true')
+        r.append(fldChar)
+    new_doc.add_paragraph("") # Spacer
+
+    # 2. Append "DEFINITIONS" from Template (full text)
     new_doc.add_page_break()
     new_doc.add_heading("DEFINITIONS (from Template)", level=1)
-    # Add the raw text of the definitions section
+    # Add the raw text of the definitions section, preserving line breaks and structure
     for line in template_definitions_text.split('\n'):
         if line.strip(): # Only add non-empty lines
-            new_doc.add_paragraph(line.strip())
+            new_doc.add_paragraph(line) # Add line directly to preserve original spacing/indentation from raw text
     new_doc.add_paragraph("") # Spacer
 
     # 3. Append "Adoption of MOI" Table from Template
@@ -742,6 +778,7 @@ async def refine_document_route():
              return jsonify({"error": f"AI processing failed: {refinement_instructions['summary']}"}), 500
 
         # Create the new document by inserting template content into the data file
+        # Pass the raw data file content and the parsed template info
         refined_doc_io = create_refined_document(data_file_content_raw, parsed_template_content, refinement_instructions)
 
         return send_file(
